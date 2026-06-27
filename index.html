@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>leanto — popsicle-stick sandbox</title>
+<style>
+  :root { --ink:#3a2e22; --paper:#efe9df; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--paper);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); }
+  canvas { display:block; touch-action:none; }
+  #hud { position:fixed; left:16px; top:14px; max-width:340px; pointer-events:none;
+    font-size:12.5px; line-height:1.5; text-shadow:0 1px 0 rgba(255,255,255,.5); }
+  #hud h1 { font-family: ui-serif, Georgia, "Times New Roman", serif; font-size:19px;
+    margin:0 0 2px; letter-spacing:.2px; }
+  #hud .sub { opacity:.7; font-style:italic; margin-bottom:10px; }
+  #hud kbd { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; font-size:11px;
+    background:rgba(58,46,34,.09); border:1px solid rgba(58,46,34,.18); border-bottom-width:2px;
+    border-radius:4px; padding:1px 5px; }
+  #hud .row { margin:2px 0; }
+  #hud .test { margin-top:12px; padding:9px 11px; background:rgba(58,46,34,.06);
+    border-left:3px solid #b07a3c; border-radius:0 6px 6px 0; }
+  #hud .test b { color:#8a5a22; }
+  #status { position:fixed; right:14px; top:12px; font-size:11px; opacity:.55;
+    font-family: ui-monospace, monospace; text-align:right; }
+  #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family: ui-serif, Georgia, serif; font-size:20px; opacity:.6; }
+  #err { position:fixed; left:16px; bottom:16px; right:16px; color:#7a1f1f;
+    font-family: ui-monospace, monospace; font-size:12px; white-space:pre-wrap; display:none; }
+</style>
+</head>
+<body>
+  <div id="loading">whittling sticks…</div>
+  <div id="hud" style="display:none">
+    <h1>leanto</h1>
+    <div class="sub">a table, some sticks, and gravity.</div>
+    <div class="row"><kbd>L-drag</kbd> a stick — pick up &amp; move (rests on whatever's under the cursor)</div>
+    <div class="row"><kbd>R-drag</kbd> a stick — rotate it (drag to spin &amp; tilt) · <kbd>Z</kbd><kbd>X</kbd> roll</div>
+    <div class="row"><kbd>L-drag</kbd> empty — orbit · <kbd>R-drag</kbd> empty — pan · <kbd>scroll</kbd> zoom</div>
+    <div class="row"><kbd>release</kbd> — it freezes where you leave it, so you can prop the next stick</div>
+    <div class="row"><kbd>Space</kbd> new stick · <kbd>M</kbd> mute · <kbd>Backspace</kbd> sweep table</div>
+    <div class="row"><kbd>B</kbd> <b>BUILD ⇄ RUN</b> — RUN drops your structure into live physics</div>
+    <div class="test">
+      <b>The test:</b> you start in <b>BUILD</b> — grab sticks and prop a lean-to (each one holds where you
+      leave it). Then press <kbd>B</kbd> to drop into live physics and watch it stand — or fall.
+      Does that feel <b>satisfying</b>? That's the whole question.
+    </div>
+  </div>
+  <div id="status"></div>
+  <div id="err"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+window.__leanto = { ready:false, sticks:0, frames:0, error:null, buildMode:true };
+const loadingEl = document.getElementById('loading');
+const hudEl = document.getElementById('hud');
+const statusEl = document.getElementById('status');
+const errEl = document.getElementById('err');
+
+try {
+  const THREE = await import('three');
+  const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+  const RAPIER_mod = await import('https://esm.sh/@dimforge/rapier3d-compat@0.14.0');
+  const RAPIER = RAPIER_mod.default ?? RAPIER_mod;
+  await RAPIER.init();
+
+  // ---------- renderer / scene / camera ----------
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#ece6db');
+
+  const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.01, 100);
+  camera.position.set(0.42, 0.46, 0.66);
+
+  const renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  document.body.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.09;
+  controls.minDistance = 0.18;
+  controls.maxDistance = 2.2;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  controls.update();
+
+  // ---------- lights ----------
+  scene.add(new THREE.HemisphereLight('#fff6e6', '#5c4a39', 0.85));
+  const key = new THREE.DirectionalLight('#fff1d8', 2.3);
+  key.position.set(0.55, 1.05, 0.42);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  const sd = 0.85;
+  Object.assign(key.shadow.camera, { left:-sd, right:sd, top:sd, bottom:-sd, near:0.1, far:3.2 });
+  key.shadow.bias = -0.0004;
+  key.shadow.normalBias = 0.0015;
+  scene.add(key);
+  const fill = new THREE.DirectionalLight('#dde7ff', 0.45);
+  fill.position.set(-0.5, 0.45, -0.35);
+  scene.add(fill);
+
+  // ---------- physics world ----------
+  // gentler than real-Earth so light sticks settle calmly instead of slamming
+  const world = new RAPIER.World({ x:0, y:-6.0, z:0 });
+  const eventQueue = new RAPIER.EventQueue(true);
+
+  // ---------- wood grain texture ----------
+  function makeGrain() {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+    const g = c.getContext('2d');
+    g.fillStyle = '#d8b478'; g.fillRect(0,0,256,64);
+    for (let i=0;i<80;i++){
+      g.strokeStyle = `rgba(110,72,36,${0.03 + Math.random()*0.10})`;
+      g.lineWidth = 0.4 + Math.random()*1.3;
+      const y = Math.random()*64;
+      g.beginPath(); g.moveTo(0,y);
+      for (let x=0;x<=256;x+=14) g.lineTo(x, y + (Math.random()-0.5)*2.6);
+      g.stroke();
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 4;
+    return t;
+  }
+  const grain = makeGrain();
+
+  // ---------- table ----------
+  const TW = 1.3, TD = 0.9, TT = 0.06;
+  const tableMat = new THREE.MeshStandardMaterial({ color:'#6f5337', roughness:0.88, metalness:0 });
+  const tableMesh = new THREE.Mesh(new THREE.BoxGeometry(TW, TT, TD), tableMat);
+  tableMesh.position.y = -TT/2;            // top surface sits at y = 0
+  tableMesh.receiveShadow = true;
+  scene.add(tableMesh);
+  const tableBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -TT/2, 0));
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(TW/2, TT/2, TD/2).setFriction(0.95).setRestitution(0.0),
+    tableBody
+  );
+
+  // ---------- sticks ----------
+  const STICK_L = 0.114, STICK_W = 0.010, STICK_T = 0.002; // real popsicle-stick metres
+  let buildMode = true;     // BUILD (default) vs RUN; in BUILD, placed sticks freeze (Fixed) so you can build
+  const sticks = [];        // { mesh, body }
+  const stickMeshes = [];
+  const MAX_STICKS = 140;
+
+  function spawnStick(x, y, z, yaw) {
+    if (sticks.length >= MAX_STICKS) return null;
+    const lj = 1 + (Math.random()-0.5)*0.07;            // ±3.5% length jitter
+    const len = STICK_L * lj;
+    const geo = new THREE.BoxGeometry(len, STICK_T, STICK_W);
+    const tint = new THREE.Color().setHSL(
+      0.092 + (Math.random()-0.5)*0.025,                // warm wood hue, slight drift
+      0.42 + Math.random()*0.13,
+      0.60 + (Math.random()-0.5)*0.13
+    );
+    const mat = new THREE.MeshStandardMaterial({
+      map: grain, color: tint, roughness: 0.66 + Math.random()*0.16, metalness: 0,
+      emissive: 0x000000
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    scene.add(mesh);
+
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw||0, 0));
+    const body = world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(x, y, z)
+        .setRotation({ x:q.x, y:q.y, z:q.z, w:q.w })
+        .setLinearDamping(0.6).setAngularDamping(0.9)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(len/2, STICK_T/2, STICK_W/2)
+        .setFriction(0.95).setRestitution(0.03).setDensity(420)   // ~basswood
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      body
+    );
+
+    const rec = { mesh, body };
+    mesh.userData.rec = rec;
+    sticks.push(rec); stickMeshes.push(mesh);
+    window.__leanto.sticks = sticks.length;
+    if (buildMode) body.setBodyType(RAPIER.RigidBodyType.Fixed, true); // freeze-on-place: static, collidable, holds pose
+    return rec;
+  }
+
+  // a few sticks laid flat on the table, ready to build with (BUILD mode is the default)
+  for (let i=0;i<6;i++){
+    const a = Math.random()*Math.PI*2, r = 0.05 + Math.random()*0.14;
+    spawnStick(Math.cos(a)*r, 0.001, Math.sin(a)*r, Math.random()*Math.PI);
+  }
+
+  // ---------- pick / hold model ----------
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+  const keys = {};
+  let held = null;
+  let grabMode = null;                       // 'move' (left-drag) | 'rotate' (right-drag)
+  let lastX = 0, lastY = 0;                   // right-drag rotation deltas
+  const grabOffset = new THREE.Vector3();     // keep the grabbed point under the cursor
+  const heldQuat = new THREE.Quaternion();
+  const targetPos = new THREE.Vector3();
+  const smoothPos = new THREE.Vector3();
+
+  function setNdc(e){
+    ndc.x = (e.clientX/innerWidth)*2 - 1;
+    ndc.y = -(e.clientY/innerHeight)*2 + 1;
+  }
+  function cursorOnPlane(h, out){
+    plane.constant = -h;                    // plane y = h
+    raycaster.setFromCamera(ndc, camera);
+    return raycaster.ray.intersectPlane(plane, out);
+  }
+
+  // surface inference: the held stick rests ON whatever is under the cursor (the table, or a placed stick).
+  // The cursor IS the position — no separate height to dial. (Research rank 2.)
+  const _cands = [];
+  function surfaceTarget(out){
+    raycaster.setFromCamera(ndc, camera);
+    _cands.length = 0;
+    for (const m of stickMeshes) if (!held || m !== held.mesh) _cands.push(m);
+    _cands.push(tableMesh);
+    const hits = raycaster.intersectObjects(_cands, false);
+    if (hits.length){ out.copy(hits[0].point); out.y += STICK_T/2; return true; }  // sit on top, no interpenetration
+    plane.constant = 0;                     // fallback: the bare table plane
+    if (raycaster.ray.intersectPlane(plane, out)){ out.y += STICK_T/2; return true; }
+    return false;
+  }
+
+  function grab(rec, mode, hitPoint){
+    held = rec; grabMode = mode;
+    const t = rec.body.translation(), r = rec.body.rotation();
+    heldQuat.set(r.x, r.y, r.z, r.w);
+    smoothPos.set(t.x, t.y, t.z);
+    grabOffset.set(0, 0, 0);
+    if (mode === 'move' && hitPoint) grabOffset.set(t.x - hitPoint.x, 0, t.z - hitPoint.z); // grabbed point stays under cursor
+    rec.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);  // re-grab works from Fixed too
+    rec.mesh.material.emissive.setHex(0x3a2300);
+  }
+  function release(){
+    const rec = held; held = null;
+    rec.mesh.material.emissive.setHex(0x000000);
+    if (buildMode){ rec.body.setBodyType(RAPIER.RigidBodyType.Fixed, true); return; } // freeze-on-place
+    rec.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    rec.body.setLinvel({ x:0, y:0, z:0 }, true);   // zero velocity: no launch impulse on kinematic->dynamic
+    rec.body.setAngvel({ x:0, y:0, z:0 }, true);
+  }
+
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 && e.button !== 2) return;     // left = move, right = rotate
+    setNdc(e);
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(stickMeshes, false);
+    if (!hits.length) return;                          // empty space -> OrbitControls (orbit/pan)
+    lastX = e.clientX; lastY = e.clientY;
+    grab(hits[0].object.userData.rec, e.button === 2 ? 'rotate' : 'move', hits[0].point);
+    controls.enabled = false;
+  });
+  renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());  // right-drag rotates; suppress menu
+  window.addEventListener('pointermove', (e) => {
+    if (!held) return;
+    setNdc(e);
+    if (grabMode === 'rotate') {
+      const k = 0.012;
+      const dq = new THREE.Quaternion()
+        .setFromAxisAngle(new THREE.Vector3(0, 1, 0), (e.clientX - lastX) * k)   // yaw  <- horizontal drag
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (e.clientY - lastY) * k)); // tilt <- vertical drag
+      heldQuat.premultiply(dq);                        // rotate about world axes (free, no snap)
+      lastX = e.clientX; lastY = e.clientY;
+    }
+  });
+  window.addEventListener('pointerup', () => {
+    if (held) { release(); controls.enabled = true; grabMode = null; }
+  });
+  // wheel stays bound to OrbitControls zoom — height is now resolved by surface inference, not scrolled.
+
+  window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      const p = new THREE.Vector3();
+      if (cursorOnPlane(0.16, p)) spawnStick(p.x, 0.16, p.z, Math.random()*Math.PI);
+      else spawnStick((Math.random()-0.5)*0.1, 0.16, (Math.random()-0.5)*0.1, Math.random()*Math.PI);
+    }
+    if (e.key.toLowerCase() === 'm') muted = !muted;
+    if (e.key.toLowerCase() === 'b') setBuildMode(!buildMode);
+    if (e.key === 'Backspace') { e.preventDefault(); sweep(); }
+  });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+  function applyHeldRotation(){
+    const s = 0.045, dq = new THREE.Quaternion(), ax = new THREE.Vector3();
+    const add = (x,y,z,sign) => dq.multiply(new THREE.Quaternion().setFromAxisAngle(ax.set(x,y,z), s*sign));
+    if (keys['q']) add(0,1,0, 1); if (keys['e']) add(0,1,0,-1);
+    if (keys['r']) add(1,0,0, 1); if (keys['f']) add(1,0,0,-1);
+    if (keys['z']) add(0,0,1, 1); if (keys['x']) add(0,0,1,-1);
+    heldQuat.premultiply(dq);                 // rotate about world axes
+  }
+
+  function sweep(){
+    for (const s of sticks) { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); world.removeRigidBody(s.body); }
+    sticks.length = 0; stickMeshes.length = 0; held = null; controls.enabled = true;
+    window.__leanto.sticks = 0;
+  }
+
+  // build mode = the "third hand": freeze every stick so it holds while you place the next;
+  // releasing build mode drops everything into live physics — watch it stand or fall.
+  let runRamp = -1;   // >=0 while gravity eases in after a Build->Run flip
+  function setBuildMode(on){
+    buildMode = on;
+    for (const s of sticks){
+      if (s === held) continue;
+      if (on){
+        s.body.setBodyType(RAPIER.RigidBodyType.Fixed, true);       // freeze-on-place: static + collidable
+      } else {
+        s.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+        s.body.setLinvel({ x:0, y:0, z:0 }, true);                  // no launch impulse
+        s.body.setAngvel({ x:0, y:0, z:0 }, true);
+        s.body.setGravityScale(0.25, true);                         // gravity eases in (see loop)
+        s.body.wakeUp();
+      }
+    }
+    if (!on) runRamp = 0;                                           // start the gentle Build->Run hand-off
+    window.__leanto.buildMode = on;
+  }
+
+  // ---------- sound ----------
+  let audioCtx = null, muted = false, lastClack = 0;
+  function clack(){
+    if (muted) return;
+    const now = performance.now(); if (now - lastClack < 55) return; lastClack = now;
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'triangle'; o.frequency.value = 170 + Math.random()*130;
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.05, audioCtx.currentTime + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.085);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + 0.1);
+    } catch (_) {}
+  }
+
+  // ---------- loop ----------
+  let dt = 1/60, last = performance.now();
+  function loop(now){
+    dt = Math.min(0.033, (now - last)/1000); last = now;
+
+    if (held) {
+      applyHeldRotation();                              // keys remain a quiet secondary control (Z/X roll, etc.)
+      if (grabMode === 'move' && surfaceTarget(targetPos)) {
+        targetPos.x += grabOffset.x; targetPos.z += grabOffset.z;   // keep the grabbed point under the cursor
+        smoothPos.lerp(targetPos, 0.4);
+      }
+      held.body.setNextKinematicTranslation({ x:smoothPos.x, y:smoothPos.y, z:smoothPos.z });
+      held.body.setNextKinematicRotation({ x:heldQuat.x, y:heldQuat.y, z:heldQuat.z, w:heldQuat.w });
+    }
+
+    if (runRamp >= 0) {                       // ease gravity 0.25 -> 1 over ~0.8s so the structure settles gently
+      runRamp += dt;
+      const gs = Math.min(1, 0.25 + 0.94 * (runRamp / 0.8));
+      for (const s of sticks) if (s !== held) s.body.setGravityScale(gs, true);
+      if (runRamp >= 0.8) runRamp = -1;
+    }
+
+    world.step(eventQueue);
+    eventQueue.drainCollisionEvents((a, b, started) => { if (started) clack(); });
+
+    for (const s of sticks) {
+      const t = s.body.translation(), r = s.body.rotation();
+      s.mesh.position.set(t.x, t.y, t.z);
+      s.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+    window.__leanto.frames++;
+    if (sticks.length) {
+      window.__leanto.firstY = sticks[0].body.translation().y;
+      window.__leanto.lastY = sticks[sticks.length - 1].body.translation().y;
+    }
+    requestAnimationFrame(loop);
+  }
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  loadingEl.style.display = 'none';
+  hudEl.style.display = 'block';
+  window.__leanto.ready = true;
+  requestAnimationFrame(loop);
+
+  // lightweight on-screen status
+  setInterval(() => {
+    const mode = buildMode ? 'BUILD · frozen' : 'live';
+    statusEl.textContent = `${sticks.length} sticks · ${held ? 'holding' : mode}`;
+  }, 200);
+
+} catch (err) {
+  window.__leanto.error = String(err && err.stack || err);
+  loadingEl.style.display = 'none';
+  errEl.style.display = 'block';
+  errEl.textContent = 'leanto failed to start:\n' + window.__leanto.error;
+}
+</script>
+</body>
+</html>
