@@ -41,6 +41,7 @@
     <div class="row"><kbd>release</kbd> — it freezes where you leave it, so you can prop the next stick</div>
     <div class="row"><kbd>Space</kbd> new stick · <kbd>M</kbd> mute · <kbd>Backspace</kbd> sweep table</div>
     <div class="row"><kbd>B</kbd> <b>BUILD ⇄ RUN</b> — RUN drops your structure into live physics</div>
+    <div class="row"><kbd>G</kbd> <b>GLUE</b> — click two sticks to bond them into a rigid assembly</div>
     <div class="test">
       <b>The test:</b> you start in <b>BUILD</b> — grab sticks and prop a lean-to (each one holds where you
       leave it). Then press <kbd>B</kbd> to drop into live physics and watch it stand — or fall.
@@ -60,7 +61,7 @@
 </script>
 
 <script type="module">
-window.__leanto = { ready:false, sticks:0, frames:0, error:null, buildMode:true };
+window.__leanto = { ready:false, sticks:0, frames:0, error:null, buildMode:true, glueMode:false, joints:0 };
 const loadingEl = document.getElementById('loading');
 const hudEl = document.getElementById('hud');
 const statusEl = document.getElementById('status');
@@ -219,6 +220,21 @@ try {
   const targetPos = new THREE.Vector3();
   const smoothPos = new THREE.Vector3();
 
+  // ---------- glue (phase 2): bond two sticks with a Rapier fixed joint ----------
+  // BUILD a structure, press G for GLUE, click two sticks — they weld; in RUN they hold
+  // together as a rigid assembly instead of sliding apart. This is "wet glue": a fixed
+  // joint that preserves the current relative pose (so nothing snaps when you bond).
+  // "Dry glue" — merging the pair into one compound rigid body — is a phase-2-next step.
+  let glueMode = false;
+  let glueFirst = null;                        // first stick picked for the in-progress bond
+  const joints = [];                           // { joint, a, b, bead }
+  const GLUE_HL = 0x0d2e12;                     // emissive tint marking a glue-selected stick
+  const beadGeo = new THREE.SphereGeometry(0.0038, 12, 10);
+  const beadMat = new THREE.MeshStandardMaterial({
+    color:'#caa14a', roughness:0.35, metalness:0, transparent:true, opacity:0.9,
+    emissive:0x3a2a00, emissiveIntensity:0.4
+  });
+
   function setNdc(e){
     ndc.x = (e.clientX/innerWidth)*2 - 1;
     ndc.y = -(e.clientY/innerHeight)*2 + 1;
@@ -263,11 +279,73 @@ try {
     rec.body.setAngvel({ x:0, y:0, z:0 }, true);
   }
 
+  // ---------- glue picking + bonding ----------
+  function setGlueMode(on){
+    glueMode = on;
+    if (!on) clearGlueSel();
+    window.__leanto.glueMode = on;
+  }
+  function clearGlueSel(){
+    if (glueFirst && glueFirst !== held) glueFirst.mesh.material.emissive.setHex(0x000000);
+    glueFirst = null;
+  }
+  function gluePick(rec, hitPoint){
+    if (!glueFirst){                                  // 1st pick: arm the bond, highlight it
+      glueFirst = rec;
+      rec.mesh.material.emissive.setHex(GLUE_HL);
+      return;
+    }
+    if (rec === glueFirst){ clearGlueSel(); return; } // re-click the same stick: cancel
+    bondSticks(glueFirst, rec, hitPoint);             // 2nd pick: weld the two
+    glueFirst.mesh.material.emissive.setHex(0x000000);
+    glueFirst = null;
+  }
+
+  // Weld stick b onto stick a, preserving their CURRENT relative pose, via a fixed joint.
+  // A fixed joint forces the two anchor frames to coincide in world space; to avoid any
+  // snap we make that already-true at creation: anchorA = b's centre in a's local frame,
+  // frameA = b's rotation relative to a, and b's anchor/frame are identity (b's own origin).
+  const _pa = new THREE.Vector3(), _pb = new THREE.Vector3();
+  const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _qaInv = new THREE.Quaternion();
+  function bondSticks(a, b, bondPt){
+    const ta = a.body.translation(), ra = a.body.rotation();
+    const tb = b.body.translation(), rb = b.body.rotation();
+    _pa.set(ta.x, ta.y, ta.z); _qa.set(ra.x, ra.y, ra.z, ra.w);
+    _pb.set(tb.x, tb.y, tb.z); _qb.set(rb.x, rb.y, rb.z, rb.w);
+    _qaInv.copy(_qa).invert();
+    const anchorA = _pb.clone().sub(_pa).applyQuaternion(_qaInv);   // b's centre, in a's local frame
+    const frameA  = _qaInv.clone().multiply(_qb);                   // b's rotation, relative to a
+    const params = RAPIER.JointData.fixed(
+      { x:anchorA.x, y:anchorA.y, z:anchorA.z },
+      { x:frameA.x,  y:frameA.y,  z:frameA.z, w:frameA.w },
+      { x:0, y:0, z:0 },
+      { x:0, y:0, z:0, w:1 }
+    );
+    const joint = world.createImpulseJoint(params, a.body, b.body, true);
+    // an amber glue bead at the bond point, parented to a's mesh so it rides the assembly
+    const bead = new THREE.Mesh(beadGeo, beadMat);
+    a.mesh.updateMatrixWorld();
+    bead.position.copy(a.mesh.worldToLocal((bondPt ? bondPt.clone() : _pb.clone())));
+    a.mesh.add(bead);
+    joints.push({ joint, a, b, bead });
+    window.__leanto.joints = joints.length;
+    clack();
+  }
+
   renderer.domElement.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 && e.button !== 2) return;     // left = move, right = rotate
     setNdc(e);
     raycaster.setFromCamera(ndc, camera);
     const hits = raycaster.intersectObjects(stickMeshes, false);
+
+    if (glueMode) {                                    // GLUE: left-click sticks to bond, right-click cancels
+      if (e.button === 2) { clearGlueSel(); return; }
+      if (!hits.length) return;                        // empty space -> OrbitControls (orbit/pan)
+      controls.enabled = false;                        // hold the camera still during a pick
+      gluePick(hits[0].object.userData.rec, hits[0].point);
+      return;
+    }
+
     if (!hits.length) return;                          // empty space -> OrbitControls (orbit/pan)
     lastX = e.clientX; lastY = e.clientY;
     grab(hits[0].object.userData.rec, e.button === 2 ? 'rotate' : 'move', hits[0].point);
@@ -288,6 +366,7 @@ try {
   });
   window.addEventListener('pointerup', () => {
     if (held) { release(); controls.enabled = true; grabMode = null; }
+    else if (glueMode) { controls.enabled = true; }   // re-enable the camera after a glue pick
   });
   // wheel stays bound to OrbitControls zoom — height is now resolved by surface inference, not scrolled.
 
@@ -301,6 +380,7 @@ try {
     }
     if (e.key.toLowerCase() === 'm') muted = !muted;
     if (e.key.toLowerCase() === 'b') setBuildMode(!buildMode);
+    if (e.key.toLowerCase() === 'g') setGlueMode(!glueMode);
     if (e.key === 'Backspace') { e.preventDefault(); sweep(); }
   });
   window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
@@ -315,9 +395,11 @@ try {
   }
 
   function sweep(){
+    for (const j of joints) { try { world.removeImpulseJoint(j.joint, false); } catch (_) {} }
+    joints.length = 0; glueFirst = null;
     for (const s of sticks) { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); world.removeRigidBody(s.body); }
     sticks.length = 0; stickMeshes.length = 0; held = null; controls.enabled = true;
-    window.__leanto.sticks = 0;
+    window.__leanto.sticks = 0; window.__leanto.joints = 0;
   }
 
   // build mode = the "third hand": freeze every stick so it holds while you place the next;
@@ -412,7 +494,8 @@ try {
   // lightweight on-screen status
   setInterval(() => {
     const mode = buildMode ? 'BUILD · frozen' : 'live';
-    statusEl.textContent = `${sticks.length} sticks · ${held ? 'holding' : mode}`;
+    const glue = glueMode ? (glueFirst ? ' · GLUE: pick 2nd stick' : ' · GLUE: pick 1st stick') : '';
+    statusEl.textContent = `${sticks.length} sticks · ${joints.length} glued · ${held ? 'holding' : mode}${glue}`;
   }, 200);
 
 } catch (err) {
