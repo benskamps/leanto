@@ -14,6 +14,7 @@ export async function boot() {
   const { createSticks }  = await import('./sticks.js');
   const { createGlue }    = await import('./glue.js');
   const { createTools }   = await import('./tools.js');
+  const { createSave }    = await import('./save.js');
 
   const loadingEl = document.getElementById('loading');
   const hudEl = document.getElementById('hud');
@@ -27,6 +28,7 @@ export async function boot() {
   createSticks(ctx);
   createGlue(ctx);
   createTools(ctx);
+  createSave(ctx);
   const { world, eventQueue, camera, renderer, controls, tableMesh,
           sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
 
@@ -84,10 +86,15 @@ export async function boot() {
   }
 
   const _mq = new THREE.Quaternion(), _mp = new THREE.Vector3();
+  let grabPoses = null;                       // pre-grab poses of the whole group, for undo
   function grab(rec, mode, hitPoint){
     ctx.held = rec; grabMode = mode;
     liftY = 0;                                // each grab starts resting on the surface
     _heldMeshes.clear();
+    grabPoses = ctx.buildMode ? ctx.assemblyOf(rec).map(m => {
+      const t = m.body.translation(), r = m.body.rotation();
+      return { rec: m, pos: new THREE.Vector3(t.x, t.y, t.z), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w) };
+    }) : null;
 
     if (rec.cured){
       // RUN, dry assembly: grab the whole compound body and steer it
@@ -137,6 +144,25 @@ export async function boot() {
         m.rec.body.setLinvel({ x:0, y:0, z:0 }, true);   // zero velocity: no launch impulse
         m.rec.body.setAngvel({ x:0, y:0, z:0 }, true);
       }
+      ctx.lastPlaced = rec;                              // the stamp tool copies this one
+      if (ctx.buildMode && grabPoses){
+        const t = rec.body.translation(), g0 = grabPoses.find(g => g.rec === rec);
+        if (g0 && (Math.hypot(t.x-g0.pos.x, t.y-g0.pos.y, t.z-g0.pos.z) > 1e-5 ||
+                   Math.abs(rec.currQuat.dot(g0.quat)) < 0.999999)){
+          const poses = grabPoses;
+          ctx.pushUndo(() => {
+            for (const g of poses){
+              if (!ctx.sticks.includes(g.rec) || g.rec.cured) continue;
+              g.rec.body.setTranslation({ x:g.pos.x, y:g.pos.y, z:g.pos.z }, true);
+              g.rec.body.setRotation({ x:g.quat.x, y:g.quat.y, z:g.quat.z, w:g.quat.w }, true);
+              g.rec.currPos.copy(g.pos); g.rec.prevPos.copy(g.pos);
+              g.rec.currQuat.copy(g.quat); g.rec.prevQuat.copy(g.quat);
+              g.rec.mesh.position.copy(g.pos); g.rec.mesh.quaternion.copy(g.quat);
+            }
+          });
+        }
+      }
+      grabPoses = null;
       return;
     }
     // compound grab (RUN)
@@ -166,7 +192,13 @@ export async function boot() {
       if (beadHits.length){
         if (!ctx.buildMode) { ctx.deny(); return; }    // unglue is a BUILD-table action
         controls.enabled = false;
-        ctx.removeBond(beadHits[0].object.userData.bond);
+        const bond = beadHits[0].object.userData.bond;
+        const { a, b } = bond;
+        const beadW = bond.bead.getWorldPosition(new THREE.Vector3());
+        ctx.removeBond(bond);
+        ctx.pushUndo(() => {
+          if (ctx.sticks.includes(a) && ctx.sticks.includes(b)) ctx.bondSticks(a, b, beadW);
+        });
         return;
       }
       const hits = raycaster.intersectObjects(stickMeshes, false);
@@ -189,6 +221,10 @@ export async function boot() {
       raycaster.setFromCamera(ndc, camera);
       const hits = raycaster.intersectObjects(stickMeshes, false);
       ctx.snipHover(hits.length ? hits[0].object.userData.rec : null, hits.length ? hits[0].point : null);
+    }
+    if (keys['d'] && ctx.buildMode && !ctx.held) {     // plank-run: hold D + sweep the cursor
+      const p = new THREE.Vector3();
+      if (cursorSurfacePoint(p)) ctx.stampRun(p);
     }
     if (!ctx.held) return;
     if (grabMode === 'rotate') {
@@ -223,13 +259,26 @@ export async function boot() {
       const yaw = Math.random()*Math.PI;
       const half = e.shiftKey                // Shift+Space: a half-stick — the picket-fence unit
         ? { len: ctx.STICK.L * (1 + (Math.random()-0.5)*0.07) / 2, ends: ['round', 'square'] } : {};
+      let spawned = null;
       if (ctx.buildMode) {                   // BUILD: the new stick rests on whatever's under the cursor
         if (!cursorSurfacePoint(p)) p.set((Math.random()-0.5)*0.1, 0, (Math.random()-0.5)*0.1);
-        ctx.spawnStick(p.x, 0, p.z, yaw, { rest:true, ...half });
+        spawned = ctx.spawnStick(p.x, 0, p.z, yaw, { rest:true, ...half });
       }
-      else if (cursorOnPlane(0.16, p)) ctx.spawnStick(p.x, 0.16, p.z, yaw);   // RUN: toss it in
-      else ctx.spawnStick((Math.random()-0.5)*0.1, 0.16, (Math.random()-0.5)*0.1, yaw);
+      else if (cursorOnPlane(0.16, p)) spawned = ctx.spawnStick(p.x, 0.16, p.z, yaw);   // RUN: toss it in
+      else spawned = ctx.spawnStick((Math.random()-0.5)*0.1, 0.16, (Math.random()-0.5)*0.1, yaw);
+      if (spawned && ctx.buildMode) ctx.pushUndo(() => ctx.removeStick(spawned));
     }
+    if (e.key.toLowerCase() === 'd' && !e.repeat && !ctx.held && !e.ctrlKey && !e.metaKey) {
+      const p = new THREE.Vector3();          // stamp a copy of the last-placed stick
+      if (cursorSurfacePoint(p)) ctx.stampAt(p);
+      ctx.setStampRun(true);
+    }
+    if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (!ctx.held) ctx.undo();              // undoing mid-hold would yank the stick from your hand
+    }
+    if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ctx.downloadScene(); return; }
+    if ((e.key === 'o' || e.key === 'O') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ctx.openScenePicker(); return; }
     if (e.key.toLowerCase() === 'm') ctx.toggleMute();
     if (e.key.toLowerCase() === 'b' && !e.repeat) {
       if (ctx.held) { release(); controls.enabled = true; grabMode = null; }  // set it down before the reveal
@@ -237,13 +286,21 @@ export async function boot() {
     }
     if (e.key.toLowerCase() === 'g' && !e.repeat) { ctx.setSnipMode(false); ctx.setGlueMode(!ctx.glueMode); }
     if (e.key.toLowerCase() === 's' && !e.repeat) { ctx.setGlueMode(false); ctx.setSnipMode(!ctx.snipMode); }
-    if (e.key === 'Backspace') {
+    if (e.key === 'Backspace') {              // sweep is destructive — ask twice
       e.preventDefault();
-      if (ctx.held) { release(); controls.enabled = true; grabMode = null; }
-      ctx.sweep();
+      if (performance.now() < sweepArmedUntil){
+        sweepArmedUntil = 0;
+        if (ctx.held) { release(); controls.enabled = true; grabMode = null; }
+        if (ctx.clearUndo) ctx.clearUndo();
+        ctx.sweep();
+      } else sweepArmedUntil = performance.now() + 2000;
     }
   });
-  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+  let sweepArmedUntil = 0;
+  window.addEventListener('keyup', (e) => {
+    keys[e.key.toLowerCase()] = false;
+    if (e.key.toLowerCase() === 'd') ctx.setStampRun(false);
+  });
 
   function applyHeldRotation(){
     const s = 0.045, dq = new THREE.Quaternion(), ax = new THREE.Vector3();
@@ -343,6 +400,7 @@ export async function boot() {
     const mode = ctx.buildMode ? 'BUILD · frozen' : 'live';
     const glue = ctx.glueMode ? (ctx.glueArmed() ? ' · GLUE: pick 2nd stick or a bead' : ' · GLUE: pick a stick or a bead') : '';
     const snip = ctx.snipMode ? ' · SNIP: click a stick to cut' : '';
-    statusEl.textContent = `${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}`;
+    const sweepHint = performance.now() < sweepArmedUntil ? ' · BACKSPACE AGAIN TO SWEEP' : '';
+    statusEl.textContent = `${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}${sweepHint}`;
   }, 200);
 }
