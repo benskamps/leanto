@@ -15,6 +15,7 @@ export async function boot() {
   const { createGlue }    = await import('./glue.js');
   const { createTools }   = await import('./tools.js');
   const { createSave }    = await import('./save.js');
+  const { createCharm }   = await import('./charm.js');
 
   const loadingEl = document.getElementById('loading');
   const hudEl = document.getElementById('hud');
@@ -29,8 +30,26 @@ export async function boot() {
   createGlue(ctx);
   createTools(ctx);
   createSave(ctx);
+  createCharm(ctx);
   const { world, eventQueue, camera, renderer, controls, tableMesh,
           sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
+
+  // tiny tween system for the charm layer (bead pop-ins, etc.)
+  const tweens = [];
+  ctx.addTween = (dur, fn) => tweens.push({ t: 0, dur, fn });
+
+  // survival celebration bookkeeping: snapshot the table at every RUN reveal
+  let runWatch = null;                       // { entries:[{rec,p}], elapsed, driftTimer, done }
+  const rawSetBuildMode = ctx.setBuildMode;
+  ctx.setBuildMode = (on) => {
+    rawSetBuildMode(on);
+    if (!on){
+      window.__leanto.maxDrift = 0;
+      runWatch = { entries: sticks.map(s => ({ rec: s, p: s.currPos.clone() })),
+                   elapsed: 0, driftTimer: 0, done: false,
+                   tall: sticks.some(s => s.currPos.y > 0.03), bonded: ctx.joints.length > 0 };
+    } else runWatch = null;
+  };
 
   // a few sticks laid flat on the table, ready to build with (BUILD mode is the default)
   for (let i=0;i<6;i++){
@@ -286,6 +305,15 @@ export async function boot() {
     }
     if (e.key.toLowerCase() === 'g' && !e.repeat) { ctx.setSnipMode(false); ctx.setGlueMode(!ctx.glueMode); }
     if (e.key.toLowerCase() === 's' && !e.repeat) { ctx.setGlueMode(false); ctx.setSnipMode(!ctx.snipMode); }
+    if (e.key.toLowerCase() === 'p' && !e.repeat && !e.ctrlKey && !e.metaKey) {
+      if (e.shiftKey){                        // Shift+P: save a clean PNG of the current view
+        renderer.render(ctx.scene, camera);
+        const a = document.createElement('a');
+        a.href = renderer.domElement.toDataURL('image/png');
+        a.download = 'leanto.png';
+        a.click();
+      } else setPhotoMode(!photoMode);        // P: hide the HUD, slow turntable
+    }
     if (e.key === 'Backspace') {              // sweep is destructive — ask twice
       e.preventDefault();
       if (performance.now() < sweepArmedUntil){
@@ -301,6 +329,18 @@ export async function boot() {
     keys[e.key.toLowerCase()] = false;
     if (e.key.toLowerCase() === 'd') ctx.setStampRun(false);
   });
+
+  let photoMode = false;
+  function setPhotoMode(on){
+    photoMode = on;
+    hudEl.style.display = on ? 'none' : 'block';
+    statusEl.style.display = on ? 'none' : 'block';
+    ctx.daylightDial.style.display = on ? 'none' : 'block';
+    controls.autoRotate = on;
+    controls.autoRotateSpeed = 0.8;
+    window.__leanto.photoMode = on;
+  }
+  ctx.setPhotoMode = setPhotoMode;
 
   function applyHeldRotation(){
     const s = 0.045, dq = new THREE.Quaternion(), ax = new THREE.Vector3();
@@ -341,7 +381,19 @@ export async function boot() {
     }
     for (const s of sticks){ s.prevPos.copy(s.currPos); s.prevQuat.copy(s.currQuat); }
     world.step(eventQueue);
-    eventQueue.drainCollisionEvents((a, b, started) => { if (started) ctx.clack(); });
+    eventQueue.drainCollisionEvents((h1, h2, started) => {
+      if (!started) return;
+      let strength = 0.5, len;
+      try {                                   // gain from impact speed, pitch from stick length
+        const b1 = world.getCollider(h1)?.parent(), b2 = world.getCollider(h2)?.parent();
+        const v1 = b1 ? b1.linvel() : { x:0, y:0, z:0 };
+        const v2 = b2 ? b2.linvel() : { x:0, y:0, z:0 };
+        strength = Math.min(1, Math.hypot(v1.x-v2.x, v1.y-v2.y, v1.z-v2.z) / 0.8);
+        const rec = (b1 && ctx.recByBody.get(b1.handle)) || (b2 && ctx.recByBody.get(b2.handle));
+        if (rec) len = rec.len;
+      } catch (_) {}
+      ctx.clack(strength, len);
+    });
     for (const s of sticks){
       if (s.cured){
         const bt = s.cured.body.translation(), br = s.cured.body.rotation();
@@ -375,6 +427,39 @@ export async function boot() {
     for (const s of sticks) {
       s.mesh.position.lerpVectors(s.prevPos, s.currPos, alpha);
       s.mesh.quaternion.slerpQuaternions(s.prevQuat, s.currQuat, alpha);
+    }
+
+    // charm layer: motes drift, confetti falls, light swells
+    ctx.charmUpdate(frameDt);
+    for (let i = tweens.length - 1; i >= 0; i--){
+      const tw = tweens[i];
+      tw.t += frameDt;
+      const k = Math.min(1, tw.t / tw.dur);
+      tw.fn(k);
+      if (k >= 1) tweens.splice(i, 1);
+    }
+
+    // the survival watch: a real structure (20+ sticks, glued, standing tall) that rides
+    // out 10 seconds of live physics without drifting earns a quiet celebration
+    if (!ctx.buildMode && runWatch){
+      runWatch.elapsed += frameDt;
+      runWatch.driftTimer += frameDt;
+      if (runWatch.driftTimer > 0.25){
+        runWatch.driftTimer = 0;
+        const alive = new Set(sticks);
+        let md = window.__leanto.maxDrift || 0;
+        for (const en of runWatch.entries)
+          if (alive.has(en.rec)) md = Math.max(md, en.rec.currPos.distanceTo(en.p));
+        window.__leanto.maxDrift = md;
+        if (!runWatch.done && runWatch.elapsed >= 10 && runWatch.bonded && runWatch.tall &&
+            sticks.length >= 20 && md < 0.005){
+          runWatch.done = true;
+          const c = new THREE.Vector3();
+          for (const s of sticks) c.add(s.currPos);
+          c.divideScalar(sticks.length);
+          ctx.celebrate(c);
+        }
+      }
     }
 
     controls.update();
