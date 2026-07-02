@@ -125,6 +125,7 @@ export function createSticks(ctx) {
     sticks.push(rec); stickMeshes.push(mesh);
     window.__leanto.sticks = sticks.length;
     if (ctx.buildMode) body.setBodyType(RAPIER.RigidBodyType.Fixed, true); // freeze-on-place: static, collidable, holds pose
+    ctx.lastPlaced = rec;                    // the stamp tool copies the most recent stick
     return rec;
   }
 
@@ -163,6 +164,7 @@ export function createSticks(ctx) {
         s.body.setBodyType(RAPIER.RigidBodyType.Fixed, true);       // freeze-on-place: static + collidable
       }
     } else {
+      if (ctx.clearUndo) ctx.clearUndo();     // undoing mid-RUN is incoherent — history flushes at the reveal
       if (ctx.cureAll) ctx.cureAll();         // multi-stick assemblies -> one dynamic compound each
       for (const s of sticks){
         if (s === ctx.held || s.cured) continue;
