@@ -25,9 +25,10 @@ export function createGlue(ctx) {
   const GLUE_GAP = 0.003;                      // max daylight between sticks that can still bond
   const beadGeo = new THREE.SphereGeometry(0.0038, 12, 10);
   const beadMat = new THREE.MeshStandardMaterial({
-    color:'#caa14a', roughness:0.35, metalness:0, transparent:true, opacity:0.9,
+    color:'#caa14a', roughness:0.22, metalness:0, transparent:true, opacity:0.92,
     emissive:0x3a2a00, emissiveIntensity:0.4
   });
+  const BEAD_SQUASH = 0.68;                  // a dab of glue, not a marble
 
   const key = (a, b) => `${Math.min(a.id, b.id)}:${Math.max(a.id, b.id)}`;
 
@@ -181,7 +182,13 @@ export function createGlue(ctx) {
     bead.userData.bond = entry;
     joints.push(entry); beadMeshes.push(bead); bondKeys.add(key(a, b));
     window.__leanto.joints = joints.length;
-    ctx.clack();
+    // squish on, with a little elastic pop-in
+    ctx.squish();
+    if (ctx.addTween) ctx.addTween(0.22, k => {
+      const s = k < 0.75 ? 0.2 + (k/0.75) * 0.95 : 1.15 - ((k-0.75)/0.25) * 0.15;
+      bead.scale.set(s, s * BEAD_SQUASH, s);
+    });
+    else bead.scale.set(1, BEAD_SQUASH, 1);
     return entry;
   }
 
@@ -189,12 +196,18 @@ export function createGlue(ctx) {
     const i = joints.indexOf(entry);
     if (i < 0) return;
     if (entry.joint){ try { ctx.world.removeImpulseJoint(entry.joint, false); } catch (_) {} }
-    entry.bead.removeFromParent();
-    beadMeshes.splice(beadMeshes.indexOf(entry.bead), 1);
+    const bead = entry.bead;
+    beadMeshes.splice(beadMeshes.indexOf(bead), 1);
     joints.splice(i, 1);
     bondKeys.delete(key(entry.a, entry.b));
     window.__leanto.joints = joints.length;
-    ctx.clack();
+    ctx.pop();
+    if (ctx.addTween) ctx.addTween(0.15, k => {       // the bead pops away
+      const s = (1 - k) * (1 + 0.6 * Math.sin(k * Math.PI));
+      bead.scale.set(s, s * BEAD_SQUASH, s);
+      if (k >= 1) bead.removeFromParent();
+    });
+    else bead.removeFromParent();
   }
 
   function dropBondsOf(rec){                 // snip dissolves the original stick's bonds (v1 rule)
@@ -244,7 +257,7 @@ export function createGlue(ctx) {
           j.joint = null;
         }
       }
-      for (const m of group){ ctx.world.removeRigidBody(m.body); m.body = null; }
+      for (const m of group){ ctx.recByBody.delete(m.body.handle); ctx.world.removeRigidBody(m.body); m.body = null; }
       for (const mm of members) mm.rec.cured = { body, relPos: mm.relPos, relQuat: mm.relQuat };
       compounds.push({ body, members });
     }
@@ -259,6 +272,7 @@ export function createGlue(ctx) {
         const wq = _rq.clone().multiply(mm.relQuat);
         const rec = mm.rec;
         rec.body = ctx.makeStickBody(rec.halfExtents, wp, wq, { fixed: true });
+        ctx.recByBody.set(rec.body.handle, rec);
         rec.cured = null;
         rec.currPos.copy(wp); rec.prevPos.copy(wp);
         rec.currQuat.copy(wq); rec.prevQuat.copy(wq);
