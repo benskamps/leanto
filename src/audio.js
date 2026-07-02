@@ -18,6 +18,21 @@ export function createAudio(ctx) {
     } catch (_) {}
   }
 
+  function deny(){                            // low, short "nuh-uh" for rejected actions
+    if (muted) return;
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'square'; o.frequency.value = 82;
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.03, audioCtx.currentTime + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.12);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + 0.14);
+    } catch (_) {}
+  }
+
   ctx.clack = clack;
+  ctx.deny = deny;
   ctx.toggleMute = () => { muted = !muted; };
 }

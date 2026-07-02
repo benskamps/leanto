@@ -1,5 +1,5 @@
 // sticks.js — stick geometry/materials, spawn/sweep, registry, BUILD⇄RUN mode.
-// Every stick body mutation (spawn, remove) goes through here.
+// Every stick body mutation (spawn, remove, recreate) goes through here.
 
 import * as THREE from 'three';
 
@@ -28,9 +28,40 @@ export function createSticks(ctx) {
   const grain = makeGrain();
 
   const STICK_L = 0.114, STICK_W = 0.010, STICK_T = 0.002; // real popsicle-stick metres
-  const sticks = [];        // { mesh, body, halfExtents, prev/curr pose pair }
+  const sticks = [];        // { id, mesh, body, cured, halfExtents, prev/curr pose pair }
   const stickMeshes = [];
-  const MAX_STICKS = 140;
+  const MAX_STICKS = 300;   // a cottage is ~200-240 sticks
+  let nextId = 1;           // stable ids (survive save/load; bond edge list refers to them)
+
+  // geometries cluster around STICK_L ±3.5%; cache on 0.5mm buckets so 300 sticks
+  // share ~16 geometries instead of owning one each
+  const geoCache = new Map();
+  function stickGeometry(len){
+    const key = Math.round(len*2000);
+    let g = geoCache.get(key);
+    if (!g){ g = new THREE.BoxGeometry(len, STICK_T, STICK_W); geoCache.set(key, g); }
+    return g;
+  }
+
+  // one collider-shaped body; shared by spawn and by glue's uncure (which rebuilds
+  // per-stick bodies out of a settled compound)
+  function makeStickBody(halfExtents, pos, quat, opts){
+    const body = ctx.world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(pos.x, pos.y, pos.z)
+        .setRotation({ x:quat.x, y:quat.y, z:quat.z, w:quat.w })
+        .setLinearDamping(0.6).setAngularDamping(0.9)
+        .setCcdEnabled(true)                                      // 2mm-thin boxes tunnel without CCD
+    );
+    ctx.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+        .setFriction(0.95).setRestitution(0.03).setDensity(420)   // ~basswood
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      body
+    );
+    if (opts && opts.fixed) body.setBodyType(RAPIER.RigidBodyType.Fixed, true);
+    return body;
+  }
 
   function spawnStick(x, y, z, yaw, opts) {
     if (sticks.length >= MAX_STICKS) return null;
@@ -39,7 +70,6 @@ export function createSticks(ctx) {
     const hx = len/2, hy = STICK_T/2, hz = STICK_W/2;
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw||0, 0));
     if (opts && opts.rest) y = ctx.solveDropY(x, z, q, hx, hy, hz, null); // rest on whatever's below
-    const geo = new THREE.BoxGeometry(len, STICK_T, STICK_W);
     const tint = new THREE.Color().setHSL(
       0.092 + (Math.random()-0.5)*0.025,                // warm wood hue, slight drift
       0.42 + Math.random()*0.13,
@@ -49,27 +79,19 @@ export function createSticks(ctx) {
       map: grain, color: tint, roughness: 0.66 + Math.random()*0.16, metalness: 0,
       emissive: 0x000000
     });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(stickGeometry(len), mat);
     mesh.castShadow = true; mesh.receiveShadow = true;
     ctx.scene.add(mesh);
+    mesh.position.set(x, y, z); mesh.quaternion.copy(q);
 
-    const body = ctx.world.createRigidBody(
-      RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(x, y, z)
-        .setRotation({ x:q.x, y:q.y, z:q.z, w:q.w })
-        .setLinearDamping(0.6).setAngularDamping(0.9)
-        .setCcdEnabled(true)                                      // 2mm-thin boxes tunnel without CCD
-    );
-    ctx.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(hx, hy, hz)
-        .setFriction(0.95).setRestitution(0.03).setDensity(420)   // ~basswood
-        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
-      body
-    );
+    const halfExtents = new THREE.Vector3(hx, hy, hz);
+    const pos = new THREE.Vector3(x, y, z);
+    const body = makeStickBody(halfExtents, pos, q, {});
 
-    const rec = { mesh, body,
-      halfExtents: new THREE.Vector3(hx, hy, hz),
-      prevPos: new THREE.Vector3(x, y, z), currPos: new THREE.Vector3(x, y, z),   // physics pose pair
+    const rec = { id: nextId++, mesh, body, cured: null, len,
+      halfExtents,
+      cuboid: new RAPIER.Cuboid(hx, hy, hz),                                       // reused by the drop solver
+      prevPos: pos.clone(), currPos: pos.clone(),                                  // physics pose pair
       prevQuat: q.clone(), currQuat: q.clone() };                                  // for render interpolation
     mesh.userData.rec = rec;
     sticks.push(rec); stickMeshes.push(mesh);
@@ -80,28 +102,40 @@ export function createSticks(ctx) {
 
   function sweep(){
     if (ctx.clearAllBonds) ctx.clearAllBonds();
-    for (const s of sticks) { ctx.scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); ctx.world.removeRigidBody(s.body); }
-    sticks.length = 0; stickMeshes.length = 0; ctx.held = null; ctx.controls.enabled = true;
+    if (ctx.dropCompounds) ctx.dropCompounds();
+    for (const s of sticks) {
+      ctx.scene.remove(s.mesh); s.mesh.material.dispose();      // geometry is cached/shared — keep it
+      if (s.body) ctx.world.removeRigidBody(s.body);
+    }
+    sticks.length = 0; stickMeshes.length = 0; ctx.held = null; ctx.heldBody = null; ctx.controls.enabled = true;
     window.__leanto.sticks = 0;
   }
 
   // build mode = the "third hand": freeze every stick so it holds while you place the next;
   // releasing build mode drops everything into live physics — watch it stand or fall.
+  // Glued assemblies CURE into one compound rigid body for RUN (that's what keeps a
+  // 200-stick house from jittering apart) and UNCURE back to per-stick Fixed bodies + wet
+  // joints for BUILD. The bond edge list is the source of truth across the round-trip.
   function setBuildMode(on){
     ctx.buildMode = on;
-    for (const s of sticks){
-      if (s === ctx.held) continue;
-      if (on){
+    if (on){
+      if (ctx.uncureAll) ctx.uncureAll();     // settled compounds -> per-stick Fixed bodies + recreated wet joints
+      for (const s of sticks){
+        if (s === ctx.held || s.cured) continue;
         s.body.setBodyType(RAPIER.RigidBodyType.Fixed, true);       // freeze-on-place: static + collidable
-      } else {
+      }
+    } else {
+      if (ctx.cureAll) ctx.cureAll();         // multi-stick assemblies -> one dynamic compound each
+      for (const s of sticks){
+        if (s === ctx.held || s.cured) continue;
         s.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
         s.body.setLinvel({ x:0, y:0, z:0 }, true);                  // no launch impulse
         s.body.setAngvel({ x:0, y:0, z:0 }, true);
         s.body.setGravityScale(0.25, true);                         // gravity eases in (see loop)
         s.body.wakeUp();
       }
+      ctx.runRamp = 0;                                              // start the gentle Build->Run hand-off
     }
-    if (!on) ctx.runRamp = 0;                                       // start the gentle Build->Run hand-off
     window.__leanto.buildMode = on;
   }
 
@@ -109,6 +143,7 @@ export function createSticks(ctx) {
   ctx.sticks = sticks;
   ctx.stickMeshes = stickMeshes;
   ctx.spawnStick = spawnStick;
+  ctx.makeStickBody = makeStickBody;
   ctx.sweep = sweep;
   ctx.setBuildMode = setBuildMode;
   ctx.STICK = { L: STICK_L, W: STICK_W, T: STICK_T };
