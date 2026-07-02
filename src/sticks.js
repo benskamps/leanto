@@ -122,6 +122,7 @@ export function createSticks(ctx) {
       prevPos: pos.clone(), currPos: pos.clone(),                                  // physics pose pair
       prevQuat: q.clone(), currQuat: q.clone() };                                  // for render interpolation
     mesh.userData.rec = rec;
+    ctx.recByBody.set(body.handle, rec);     // impact audio looks sticks up by body
     sticks.push(rec); stickMeshes.push(mesh);
     window.__leanto.sticks = sticks.length;
     if (ctx.buildMode) body.setBodyType(RAPIER.RigidBodyType.Fixed, true); // freeze-on-place: static, collidable, holds pose
@@ -134,7 +135,7 @@ export function createSticks(ctx) {
     if (i < 0) return;
     if (ctx.dropBondsOf) ctx.dropBondsOf(rec);
     ctx.scene.remove(rec.mesh); rec.mesh.material.dispose();    // geometry is cached/shared — keep it
-    if (rec.body) ctx.world.removeRigidBody(rec.body);
+    if (rec.body){ ctx.recByBody.delete(rec.body.handle); ctx.world.removeRigidBody(rec.body); }
     sticks.splice(i, 1); stickMeshes.splice(stickMeshes.indexOf(rec.mesh), 1);
     window.__leanto.sticks = sticks.length;
   }
@@ -146,7 +147,8 @@ export function createSticks(ctx) {
       ctx.scene.remove(s.mesh); s.mesh.material.dispose();      // geometry is cached/shared — keep it
       if (s.body) ctx.world.removeRigidBody(s.body);
     }
-    sticks.length = 0; stickMeshes.length = 0; ctx.held = null; ctx.heldBody = null; ctx.controls.enabled = true;
+    sticks.length = 0; stickMeshes.length = 0; ctx.recByBody.clear();
+    ctx.held = null; ctx.heldBody = null; ctx.controls.enabled = true;
     window.__leanto.sticks = 0;
   }
 
@@ -180,6 +182,7 @@ export function createSticks(ctx) {
   }
 
   ctx.buildMode = true;     // BUILD (default) vs RUN
+  ctx.recByBody = new Map();
   ctx.sticks = sticks;
   ctx.stickMeshes = stickMeshes;
   ctx.spawnStick = spawnStick;
