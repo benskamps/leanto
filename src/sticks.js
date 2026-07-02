@@ -33,13 +33,35 @@ export function createSticks(ctx) {
   const MAX_STICKS = 300;   // a cottage is ~200-240 sticks
   let nextId = 1;           // stable ids (survive save/load; bond edge list refers to them)
 
-  // geometries cluster around STICK_L ±3.5%; cache on 0.5mm buckets so 300 sticks
-  // share ~16 geometries instead of owning one each
+  // Real popsicle sticks have ROUNDED ENDS — a rounded-rect outline extruded to 2mm.
+  // A snipped stick keeps its factory round end and gets a honest SQUARE face at the cut.
+  // Colliders stay full cuboids (corner error < 2.2mm — invisible in play, cheap in RUN).
+  // Geometries are cached on (0.5mm length bucket, end styles): 300 sticks share a handful.
   const geoCache = new Map();
-  function stickGeometry(len){
-    const key = Math.round(len*2000);
+  function makeStickGeometry(len, endL, endR){
+    const key = `${Math.round(len*2000)}:${endL[0]}${endR[0]}`;
     let g = geoCache.get(key);
-    if (!g){ g = new THREE.BoxGeometry(len, STICK_T, STICK_W); geoCache.set(key, g); }
+    if (g) return g;
+    const r = STICK_W/2, hl = len/2;
+    const xr = endR === 'round' ? hl - r : hl;
+    const xl = endL === 'round' ? -hl + r : -hl;
+    const shape = new THREE.Shape();
+    shape.moveTo(xl, -r);
+    shape.lineTo(xr, -r);
+    if (endR === 'round') shape.absarc(xr, 0, r, -Math.PI/2, Math.PI/2, false);
+    else { shape.lineTo(hl, -r); shape.lineTo(hl, r); }
+    shape.lineTo(xl, r);
+    if (endL === 'round') shape.absarc(xl, 0, r, Math.PI/2, Math.PI*1.5, false);
+    else { shape.lineTo(-hl, r); shape.lineTo(-hl, -r); }
+    g = new THREE.ExtrudeGeometry(shape, { depth: STICK_T, bevelEnabled: false, curveSegments: 7 });
+    g.translate(0, 0, -STICK_T/2);
+    // grain runs along the stick: u tracks length at constant density, v spans the width
+    const pos = g.attributes.position, uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++)
+      uv.setXY(i, (pos.getX(i) + hl) / STICK_L, (pos.getY(i) + r) / STICK_W);
+    uv.needsUpdate = true;
+    g.rotateX(Math.PI/2);                     // extrude depth → local Y (thickness); width → local Z
+    geoCache.set(key, g);
     return g;
   }
 
@@ -63,23 +85,29 @@ export function createSticks(ctx) {
     return body;
   }
 
+  // opts: { rest, len, ends:[L,R], quat, tint, rough } — explicit values override the
+  // hand-jitter defaults (snip pieces, half-sticks, and save/load all spawn explicitly)
   function spawnStick(x, y, z, yaw, opts) {
+    opts = opts || {};
     if (sticks.length >= MAX_STICKS) return null;
     const lj = 1 + (Math.random()-0.5)*0.07;            // ±3.5% length jitter
-    const len = STICK_L * lj;
+    const len = opts.len || STICK_L * lj;
+    const ends = opts.ends || ['round', 'round'];
     const hx = len/2, hy = STICK_T/2, hz = STICK_W/2;
-    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw||0, 0));
-    if (opts && opts.rest) y = ctx.solveDropY(x, z, q, hx, hy, hz, null); // rest on whatever's below
-    const tint = new THREE.Color().setHSL(
+    const q = opts.quat ? opts.quat.clone()
+                        : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw||0, 0));
+    if (opts.rest) y = ctx.solveDropY(x, z, q, hx, hy, hz, null); // rest on whatever's below
+    const tint = opts.tint ? opts.tint.clone() : new THREE.Color().setHSL(
       0.092 + (Math.random()-0.5)*0.025,                // warm wood hue, slight drift
       0.42 + Math.random()*0.13,
       0.60 + (Math.random()-0.5)*0.13
     );
+    const rough = opts.rough != null ? opts.rough : 0.66 + Math.random()*0.16;
     const mat = new THREE.MeshStandardMaterial({
-      map: grain, color: tint, roughness: 0.66 + Math.random()*0.16, metalness: 0,
+      map: grain, color: tint, roughness: rough, metalness: 0,
       emissive: 0x000000
     });
-    const mesh = new THREE.Mesh(stickGeometry(len), mat);
+    const mesh = new THREE.Mesh(makeStickGeometry(len, ends[0], ends[1]), mat);
     mesh.castShadow = true; mesh.receiveShadow = true;
     ctx.scene.add(mesh);
     mesh.position.set(x, y, z); mesh.quaternion.copy(q);
@@ -88,7 +116,7 @@ export function createSticks(ctx) {
     const pos = new THREE.Vector3(x, y, z);
     const body = makeStickBody(halfExtents, pos, q, {});
 
-    const rec = { id: nextId++, mesh, body, cured: null, len,
+    const rec = { id: nextId++, mesh, body, cured: null, len, ends, tint, rough,
       halfExtents,
       cuboid: new RAPIER.Cuboid(hx, hy, hz),                                       // reused by the drop solver
       prevPos: pos.clone(), currPos: pos.clone(),                                  // physics pose pair
@@ -98,6 +126,16 @@ export function createSticks(ctx) {
     window.__leanto.sticks = sticks.length;
     if (ctx.buildMode) body.setBodyType(RAPIER.RigidBodyType.Fixed, true); // freeze-on-place: static, collidable, holds pose
     return rec;
+  }
+
+  function removeStick(rec){                 // single-stick removal (snip consumes the original)
+    const i = sticks.indexOf(rec);
+    if (i < 0) return;
+    if (ctx.dropBondsOf) ctx.dropBondsOf(rec);
+    ctx.scene.remove(rec.mesh); rec.mesh.material.dispose();    // geometry is cached/shared — keep it
+    if (rec.body) ctx.world.removeRigidBody(rec.body);
+    sticks.splice(i, 1); stickMeshes.splice(stickMeshes.indexOf(rec.mesh), 1);
+    window.__leanto.sticks = sticks.length;
   }
 
   function sweep(){
@@ -144,6 +182,7 @@ export function createSticks(ctx) {
   ctx.stickMeshes = stickMeshes;
   ctx.spawnStick = spawnStick;
   ctx.makeStickBody = makeStickBody;
+  ctx.removeStick = removeStick;
   ctx.sweep = sweep;
   ctx.setBuildMode = setBuildMode;
   ctx.STICK = { L: STICK_L, W: STICK_W, T: STICK_T };

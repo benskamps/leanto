@@ -13,6 +13,7 @@ export async function boot() {
   const { createSolver }  = await import('./solver.js');
   const { createSticks }  = await import('./sticks.js');
   const { createGlue }    = await import('./glue.js');
+  const { createTools }   = await import('./tools.js');
 
   const loadingEl = document.getElementById('loading');
   const hudEl = document.getElementById('hud');
@@ -25,6 +26,7 @@ export async function boot() {
   createSolver(ctx);
   createSticks(ctx);
   createGlue(ctx);
+  createTools(ctx);
   const { world, eventQueue, camera, renderer, controls, tableMesh,
           sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
 
@@ -149,6 +151,15 @@ export async function boot() {
     setNdc(e);
     raycaster.setFromCamera(ndc, camera);
 
+    if (ctx.snipMode) {                                // SNIP: click a hovered stick to cut it
+      if (e.button === 2) return;
+      const hits = raycaster.intersectObjects(stickMeshes, false);
+      if (!hits.length) return;                        // empty space -> OrbitControls
+      ctx.snipHover(hits[0].object.userData.rec, hits[0].point);
+      ctx.snip();
+      return;
+    }
+
     if (ctx.glueMode) {                                // GLUE: click sticks to bond, click a bead to unglue
       if (e.button === 2) { ctx.clearGlueSel(); return; }
       const beadHits = raycaster.intersectObjects(ctx.beadMeshes, false);
@@ -174,6 +185,11 @@ export async function boot() {
   renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());  // right-drag rotates; suppress menu
   window.addEventListener('pointermove', (e) => {
     setNdc(e);                              // track the cursor even when idle (Space spawns at it)
+    if (ctx.snipMode && !ctx.held) {        // track the cut line under the cursor
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(stickMeshes, false);
+      ctx.snipHover(hits.length ? hits[0].object.userData.rec : null, hits.length ? hits[0].point : null);
+    }
     if (!ctx.held) return;
     if (grabMode === 'rotate') {
       const k = 0.012;
@@ -205,9 +221,11 @@ export async function boot() {
       e.preventDefault();
       const p = new THREE.Vector3();
       const yaw = Math.random()*Math.PI;
+      const half = e.shiftKey                // Shift+Space: a half-stick — the picket-fence unit
+        ? { len: ctx.STICK.L * (1 + (Math.random()-0.5)*0.07) / 2, ends: ['round', 'square'] } : {};
       if (ctx.buildMode) {                   // BUILD: the new stick rests on whatever's under the cursor
         if (!cursorSurfacePoint(p)) p.set((Math.random()-0.5)*0.1, 0, (Math.random()-0.5)*0.1);
-        ctx.spawnStick(p.x, 0, p.z, yaw, { rest:true });
+        ctx.spawnStick(p.x, 0, p.z, yaw, { rest:true, ...half });
       }
       else if (cursorOnPlane(0.16, p)) ctx.spawnStick(p.x, 0.16, p.z, yaw);   // RUN: toss it in
       else ctx.spawnStick((Math.random()-0.5)*0.1, 0.16, (Math.random()-0.5)*0.1, yaw);
@@ -217,7 +235,8 @@ export async function boot() {
       if (ctx.held) { release(); controls.enabled = true; grabMode = null; }  // set it down before the reveal
       ctx.setBuildMode(!ctx.buildMode);
     }
-    if (e.key.toLowerCase() === 'g' && !e.repeat) ctx.setGlueMode(!ctx.glueMode);
+    if (e.key.toLowerCase() === 'g' && !e.repeat) { ctx.setSnipMode(false); ctx.setGlueMode(!ctx.glueMode); }
+    if (e.key.toLowerCase() === 's' && !e.repeat) { ctx.setGlueMode(false); ctx.setSnipMode(!ctx.snipMode); }
     if (e.key === 'Backspace') {
       e.preventDefault();
       if (ctx.held) { release(); controls.enabled = true; grabMode = null; }
@@ -323,6 +342,7 @@ export async function boot() {
   setInterval(() => {
     const mode = ctx.buildMode ? 'BUILD · frozen' : 'live';
     const glue = ctx.glueMode ? (ctx.glueArmed() ? ' · GLUE: pick 2nd stick or a bead' : ' · GLUE: pick a stick or a bead') : '';
-    statusEl.textContent = `${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}`;
+    const snip = ctx.snipMode ? ' · SNIP: click a stick to cut' : '';
+    statusEl.textContent = `${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}`;
   }, 200);
 }
