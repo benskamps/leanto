@@ -42,6 +42,7 @@ export async function boot() {
   let grabMode = null;                       // 'move' (left-drag) | 'rotate' (right-drag)
   let lastX = 0, lastY = 0;                   // right-drag rotation deltas
   let heldGroup = null;                       // [{rec, relPos, relQuat}] — held stick + its glued assembly
+  let liftY = 0;                              // scroll-to-lift: hover height above the solved resting pose
   const grabOffset = new THREE.Vector3();     // keep the grabbed point under the cursor
   const heldQuat = new THREE.Quaternion();
   const targetPos = new THREE.Vector3();
@@ -75,14 +76,15 @@ export async function boot() {
   function solveHeldTarget(out){
     if (!cursorSurfacePoint(out)) return false;
     out.x += grabOffset.x; out.z += grabOffset.z;   // keep the grabbed point under the cursor
-    out.y = heldGroup ? ctx.solveGroupDropY(out.x, out.z, heldQuat, heldGroup)
-                      : smoothPos.y;                // compound grab in RUN: keep height (it's dynamic on release)
+    out.y = heldGroup ? ctx.solveGroupDropY(out.x, out.z, heldQuat, heldGroup) + liftY
+                      : smoothPos.y;                // compound grab in RUN: wheel nudges height directly
     return true;
   }
 
   const _mq = new THREE.Quaternion(), _mp = new THREE.Vector3();
   function grab(rec, mode, hitPoint){
     ctx.held = rec; grabMode = mode;
+    liftY = 0;                                // each grab starts resting on the surface
     _heldMeshes.clear();
 
     if (rec.cured){
@@ -186,7 +188,16 @@ export async function boot() {
     if (ctx.held) { release(); controls.enabled = true; grabMode = null; }
     else if (ctx.glueMode) { controls.enabled = true; }   // re-enable the camera after a glue pick
   });
-  // wheel stays bound to OrbitControls zoom — height is resolved by surface inference, not scrolled.
+  // wheel: zoom when idle (OrbitControls) — but while HOLDING, the camera is parked, so the
+  // wheel becomes the y axis: scroll up lifts the held stick/assembly above its solved resting
+  // pose, scroll down settles it back. Surface inference still gives the base height.
+  renderer.domElement.addEventListener('wheel', (e) => {
+    if (!ctx.held) return;                    // idle → OrbitControls zoom
+    e.preventDefault(); e.stopImmediatePropagation();
+    const step = -e.deltaY * 0.00022;
+    if (heldGroup) liftY = Math.min(0.5, Math.max(0, liftY + step));
+    else smoothPos.y = Math.min(0.6, Math.max(0.002, smoothPos.y + step));   // compound grab (RUN)
+  }, { passive: false, capture: true });
 
   window.addEventListener('keydown', (e) => {
     keys[e.key.toLowerCase()] = true;
@@ -276,7 +287,7 @@ export async function boot() {
       applyHeldRotation();                              // keys remain a quiet secondary control (Z/X roll, etc.)
       if (grabMode === 'move' && solveHeldTarget(targetPos)) smoothPos.lerp(targetPos, 0.4);
       else if (grabMode === 'rotate' && heldGroup)      // re-solve height as the pose tilts (no freeze-through-table)
-        smoothPos.y = ctx.solveGroupDropY(smoothPos.x, smoothPos.z, heldQuat, heldGroup);
+        smoothPos.y = ctx.solveGroupDropY(smoothPos.x, smoothPos.z, heldQuat, heldGroup) + liftY;
     }
 
     acc += frameDt;
