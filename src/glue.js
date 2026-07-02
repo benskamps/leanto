@@ -196,6 +196,10 @@ export function createGlue(ctx) {
     ctx.clack();
   }
 
+  function dropBondsOf(rec){                 // snip dissolves the original stick's bonds (v1 rule)
+    for (const j of joints.slice()) if (j.a === rec || j.b === rec) removeBond(j);
+  }
+
   function clearAllBonds(){
     for (const j of joints) {
       if (j.joint){ try { ctx.world.removeImpulseJoint(j.joint, false); } catch (_) {} }
@@ -284,6 +288,7 @@ export function createGlue(ctx) {
   ctx.gluePick = gluePick;
   ctx.bondSticks = bondSticks;
   ctx.removeBond = removeBond;
+  ctx.dropBondsOf = dropBondsOf;
   ctx.clearAllBonds = clearAllBonds;
   ctx.cureAll = cureAll;
   ctx.uncureAll = uncureAll;
