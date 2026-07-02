@@ -23,7 +23,7 @@ export function createGlue(ctx) {
   const beadMeshes = [];                       // pickable beads (click to unglue)
   const GLUE_HL = 0x0d2e12;                    // emissive tint marking a glue-selected stick
   const GLUE_GAP = 0.003;                      // max daylight between sticks that can still bond
-  const beadGeo = new THREE.SphereGeometry(0.0038, 12, 10);
+  const beadGeo = new THREE.SphereGeometry(0.0028, 12, 10);
   const beadMat = new THREE.MeshStandardMaterial({
     color:'#caa14a', roughness:0.22, metalness:0, transparent:true, opacity:0.92,
     emissive:0x3a2a00, emissiveIntensity:0.4
@@ -114,6 +114,13 @@ export function createGlue(ctx) {
     const limit = (a.halfExtents.y + b.halfExtents.y) + (a.halfExtents.z + b.halfExtents.z) + GLUE_GAP;
     return segSegDist(pa1, pa2, _sb1, _sb2) < limit;
   }
+  function contactPoint(a, b){               // where the dab of glue actually goes
+    centerSegment(a, _sa1, _sa2);
+    const pa1 = _sa1.clone(), pa2 = _sa2.clone();
+    centerSegment(b, _sb1, _sb2);
+    segSegDist(pa1, pa2, _sb1, _sb2);        // fills _c1 (on a) and _c2 (on b)
+    return _c1.clone().add(_c2).multiplyScalar(0.5);
+  }
 
   // ---------- picking ----------
   function setGlueMode(on){
@@ -172,11 +179,10 @@ export function createGlue(ctx) {
   function bondSticks(a, b, bondPt){
     if (bondKeys.has(key(a, b))) return null;
     const joint = createFixedJoint(a, b);
-    // an amber glue bead at the bond point, parented to a's mesh so it rides the assembly
+    // an amber glue bead at the bond point — default to where the sticks actually touch
     const bead = new THREE.Mesh(beadGeo, beadMat.clone());
     a.mesh.updateMatrixWorld();
-    const tb = b.body.translation();
-    bead.position.copy(a.mesh.worldToLocal(bondPt ? bondPt.clone() : new THREE.Vector3(tb.x, tb.y, tb.z)));
+    bead.position.copy(a.mesh.worldToLocal(bondPt ? bondPt.clone() : contactPoint(a, b)));
     a.mesh.add(bead);
     const entry = { a, b, bead, joint };
     bead.userData.bond = entry;

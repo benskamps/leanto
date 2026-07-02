@@ -472,8 +472,68 @@ export async function boot() {
     requestAnimationFrame(loop);
   }
 
-  // dev/verification hooks (console + headless checks); the friendly api arrives with the cottage
+  // dev/verification hooks (console + headless checks)
   window.__leanto.dev = ctx;
+
+  // ---------- the friendly scripting api (authoring, showcases, headless gates) ----------
+  const byId = (id) => sticks.find(s => s.id === id);
+  window.__leanto.api = {
+    // spawn a stick from a plain descriptor; returns its id.
+    // d: { x,y,z, yaw, len, ends:[L,R], quat:[x,y,z,w], tint:'#hex', rough, rest }
+    spawn(d = {}){
+      const opts = { rest: d.rest, len: d.len, ends: d.ends, rough: d.rough };
+      if (d.quat) opts.quat = new THREE.Quaternion(d.quat[0], d.quat[1], d.quat[2], d.quat[3]);
+      if (d.tint) opts.tint = new THREE.Color(d.tint);
+      const rec = ctx.spawnStick(d.x || 0, d.y || 0, d.z || 0, d.yaw || 0, opts);
+      return rec ? rec.id : null;
+    },
+    place(id, pos, quat){                    // teleport a stick to an exact pose (stays frozen in BUILD)
+      const rec = byId(id); if (!rec || rec.cured) return false;
+      const q = quat ? new THREE.Quaternion(quat[0], quat[1], quat[2], quat[3]) : rec.currQuat;
+      rec.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+      rec.body.setTranslation({ x: pos[0], y: pos[1], z: pos[2] }, true);
+      rec.body.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+      rec.body.setBodyType(ctx.buildMode ? RAPIER.RigidBodyType.Fixed : RAPIER.RigidBodyType.Dynamic, true);
+      rec.currPos.set(pos[0], pos[1], pos[2]); rec.prevPos.copy(rec.currPos);
+      rec.currQuat.copy(q); rec.prevQuat.copy(q);
+      rec.mesh.position.copy(rec.currPos); rec.mesh.quaternion.copy(q);
+      return true;
+    },
+    bond(idA, idB, at){                      // weld two sticks (authoring skips proximity checks)
+      const a = byId(idA), b = byId(idB); if (!a || !b) return false;
+      return !!ctx.bondSticks(a, b, at ? new THREE.Vector3(at[0], at[1], at[2]) : null);
+    },
+    snipAt(id, localX){
+      const rec = byId(id); if (!rec) return false;
+      const t = rec.body.translation(), r = rec.body.rotation();
+      const q = new THREE.Quaternion(r.x, r.y, r.z, r.w);
+      const ux = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+      const p = new THREE.Vector3(t.x, t.y, t.z).addScaledVector(ux, localX);
+      ctx.setSnipMode(true); ctx.snipHover(rec, p);
+      const ok = ctx.snip(); ctx.setSnipMode(false);
+      return ok;
+    },
+    setMode(build){ ctx.setBuildMode(!!build); },
+    sweep(){ ctx.sweep(); },
+    save(){ return ctx.serialize(); },
+    load(json){ return ctx.loadScene(json); },
+    stats(){
+      let ridge = 0;
+      for (const s of sticks) ridge = Math.max(ridge, s.currPos.y);
+      return { sticks: sticks.length, bonds: ctx.joints.length, buildMode: ctx.buildMode,
+               maxDrift: window.__leanto.maxDrift || 0, ridgeY: ridge,
+               frames: window.__leanto.frames, physSteps: window.__leanto.physSteps };
+    },
+  };
+
+  // showcase: if the bundled cottage ships alongside, offer it in the HUD
+  fetch('./assets/cottage.json').then(r => r.ok ? r.json() : null).then(cottage => {
+    if (!cottage) return;
+    const el = document.getElementById('load-cottage');
+    if (!el) return;
+    el.style.display = 'block';
+    el.addEventListener('click', () => { try { ctx.loadScene(cottage); } catch (_) { ctx.deny(); } });
+  }).catch(() => {});
 
   loadingEl.style.display = 'none';
   hudEl.style.display = 'block';
