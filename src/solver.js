@@ -34,6 +34,34 @@ export function createSolver(ctx) {
     return supportExtent(q, hx, hy, hz) + DROP_EPS;   // off-table fallback: rest at tabletop plane
   }
 
+  // Group variant: the held stick plus its glued assembly move as one rigid whole.
+  // items: [{ rec, relPos, relQuat }] with poses relative to the HELD stick's frame
+  // (held item has identity rel). Returns the held CENTRE height at which the first
+  // group member touches support.
+  const _wq = new THREE.Quaternion(), _off = new THREE.Vector3();
+  function solveGroupDropY(x, z, q, items){
+    const exclude = new Set();
+    for (const it of items) if (it.rec.body) exclude.add(it.rec.body.handle);
+    const pred = (col) => { const p = col.parent(); return !(p && exclude.has(p.handle)); };
+    let drop = Infinity, fallbackY = -Infinity;
+    for (const it of items){
+      _wq.copy(q).multiply(it.relQuat);
+      _off.copy(it.relPos).applyQuaternion(q);
+      const he = it.rec.halfExtents;
+      const hit = ctx.world.castShape(
+        { x: x + _off.x, y: CAST_FROM + _off.y, z: z + _off.z },
+        { x:_wq.x, y:_wq.y, z:_wq.z, w:_wq.w }, { x:0, y:-1, z:0 },
+        it.rec.cuboid || cuboidFor(he.x, he.y, he.z), 0, CAST_FROM + 0.3, true,
+        undefined, undefined, undefined, undefined, pred
+      );
+      if (hit) drop = Math.min(drop, hit.time_of_impact);
+      fallbackY = Math.max(fallbackY, supportExtent(_wq, he.x, he.y, he.z) - _off.y);
+    }
+    if (drop < Infinity) return CAST_FROM - drop + DROP_EPS;
+    return fallbackY + DROP_EPS;
+  }
+
   ctx.supportExtent = supportExtent;
   ctx.solveDropY = solveDropY;
+  ctx.solveGroupDropY = solveGroupDropY;
 }
