@@ -29,6 +29,7 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
 |---|---|
 | **Left-drag a stick** | pick up & move — it rests on whatever's under the cursor (table or another stick) |
 | **Right-drag a stick** | rotate it — drag to spin & tilt (free, no snap) |
+| **Scroll while holding** | lift / lower the held stick (or assembly) above its resting pose |
 | **Z / X** | roll the held stick (keys are a quiet secondary control) |
 | **Release** | it freezes in place (BUILD) so you can prop the next stick; drops gently (RUN) |
 | **B** | toggle **BUILD ⇄ RUN** (RUN eases gravity in over ~1s — no slam) |
