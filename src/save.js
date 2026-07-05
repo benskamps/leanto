@@ -107,8 +107,45 @@ export function createSave(ctx) {
     setTimeout(() => el.remove(), 20000);    // fades from relevance once you start building
   }
 
+  // ---------- the seeded test scene: a deterministic three-stick lean-to ----------
+  // A fixed, reproducible starting layout so a before/after feel change is measured
+  // against the same structure every time (ROADMAP Sprint 0: "a named lean-to test
+  // scene"). Built from pure geometry — no PRNG — and expressed in the very same
+  // save format, so loading it is byte-identical run to run. Two rafters lean into a
+  // ridge and a ridge pole sits in the crook; all three are glued into one assembly,
+  // so pressing B drops a real lean-to into live physics.
+  function testScene(){
+    const L = ctx.STICK.L, T = ctx.STICK.T;
+    const theta = 58 * Math.PI / 180;              // rafter pitch from horizontal
+    const foot = L * Math.cos(theta);              // horizontal span, ridge -> foot
+    const rise = L * Math.sin(theta);              // ridge height above the table
+    const y0 = T / 2;                              // a flat stick's resting centre height
+    const ridgeY = rise + y0;
+    const qz = (a) => { const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, a)); return [q.x, q.y, q.z, q.w]; };
+    const qy = (a) => { const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, a, 0)); return [q.x, q.y, q.z, q.w]; };
+    const tint = '#c9a26a', rough = 0.72, ends = ['round', 'round'];
+    const stick = (id, pos, quat) => ({ id, len: L, ends, tint, rough, pos, quat });
+    return {
+      version: VERSION,
+      sticks: [
+        stick(1, [-foot / 2, rise / 2 + y0, 0], qz(theta)),   // left rafter  (ridge is its +X end)
+        stick(2, [ foot / 2, rise / 2 + y0, 0], qz(-theta)),  // right rafter (ridge is its -X end)
+        stick(3, [0, ridgeY + T, 0], qy(Math.PI / 2)),        // ridge pole, running along Z in the crook
+      ],
+      bonds: [
+        { a: 1, b: 2, bead: [0, ridgeY, 0] },                 // rafters meet at the ridge
+        { a: 3, b: 1, bead: [0, ridgeY, 0] },                 // ridge pole tied to each rafter
+        { a: 3, b: 2, bead: [0, ridgeY, 0] },
+      ],
+      camera: { pos: [0.22, 0.16, 0.30], target: [0, rise * 0.6, 0] },
+    };
+  }
+  function loadTest(){ return loadScene(testScene()); }
+
   ctx.serialize = serialize;
   ctx.loadScene = loadScene;
   ctx.downloadScene = download;
   ctx.openScenePicker = openPicker;
+  ctx.testScene = testScene;
+  ctx.loadTestScene = loadTest;
 }
