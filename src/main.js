@@ -160,6 +160,7 @@ export async function boot() {
     const group = heldGroup; heldGroup = null;
     const body = ctx.heldBody; ctx.heldBody = null;
     _heldMeshes.clear();
+    hoverRec = null; hideGhosts();            // drop the pre-grab highlight + aim ghost as the stick lands
     if (group){
       for (const m of group){
         m.rec.mesh.material.emissive.setHex(0x000000);
@@ -195,6 +196,102 @@ export async function boot() {
     body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
     body.setLinvel({ x:0, y:0, z:0 }, true);
     body.setAngvel({ x:0, y:0, z:0 }, true);
+  }
+
+  // ---------- pre-grab feedback: hover highlight + generous (screen-space) picking ----------
+  // Thin sticks (2mm) are a fight to grab against their razor collider, and nothing tells you
+  // which stick a click will take. So: (a) raycast the real mesh first — an exact hit wins and
+  // placement stays precise; (b) if the ray misses, take the nearest stick whose centre axis is
+  // within a few pixels of the cursor; (c) softly light whatever a grab would take.
+  const HOVER_EMISSIVE = 0x241606;            // subtle warm glow — dimmer than the held 0x3a2300
+  const PICK_TOL_PX = 12;                      // screen-space slack for near-misses on thin sticks
+  let hoverRec = null, lastHoverT = 0;
+  const _pa = new THREE.Vector3(), _pb = new THREE.Vector3();
+  const _sa = new THREE.Vector3(), _sb = new THREE.Vector3();
+  const _ux2 = new THREE.Vector3();
+
+  function projectPx(vWorld, out){            // world point -> screen px in out.x/out.y (false if behind)
+    out.copy(vWorld).project(camera);
+    if (out.z > 1) return false;              // behind camera / beyond the far plane
+    out.x = (out.x * 0.5 + 0.5) * innerWidth;
+    out.y = (-out.y * 0.5 + 0.5) * innerHeight;
+    return true;
+  }
+  function nearestStick(cx, cy){              // closest stick axis within PICK_TOL_PX of the cursor, else null
+    let best = null, bestD = PICK_TOL_PX, bestT = 0;
+    for (const s of sticks){
+      _ux2.set(1, 0, 0).applyQuaternion(s.currQuat);
+      _pa.copy(s.currPos).addScaledVector(_ux2,  s.len/2);
+      _pb.copy(s.currPos).addScaledVector(_ux2, -s.len/2);
+      if (!projectPx(_pa, _sa) || !projectPx(_pb, _sb)) continue;
+      const dx = _sb.x - _sa.x, dy = _sb.y - _sa.y, l2 = dx*dx + dy*dy;
+      let t = l2 ? ((cx - _sa.x)*dx + (cy - _sa.y)*dy) / l2 : 0;   // param of the closest point on the segment
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(cx - (_sa.x + t*dx), cy - (_sa.y + t*dy));
+      if (d < bestD){ bestD = d; best = s; bestT = t; }
+    }
+    if (!best) return null;
+    _ux2.set(1, 0, 0).applyQuaternion(best.currQuat);
+    const point = best.currPos.clone().addScaledVector(_ux2, best.len/2 - bestT*best.len);  // world grab point on the axis
+    return { rec: best, point };
+  }
+  function pickStick(cx, cy){                 // exact ray hit, else the generous near-miss; the grabbed body stays exact
+    ndc.x = (cx/innerWidth)*2 - 1;
+    ndc.y = -(cy/innerHeight)*2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(stickMeshes, false);
+    if (hits.length) return { rec: hits[0].object.userData.rec, point: hits[0].point };
+    return nearestStick(cx, cy);
+  }
+  function setHover(rec){
+    if (rec === hoverRec) return;
+    clearHover();
+    if (rec && rec !== ctx.held && !_heldMeshes.has(rec.mesh)){
+      rec.mesh.material.emissive.setHex(HOVER_EMISSIVE);
+      hoverRec = rec;
+    }
+  }
+  function clearHover(){                       // never steal the held/glue glow off a stick, or touch a swept mesh
+    if (hoverRec && hoverRec !== ctx.held && !_heldMeshes.has(hoverRec.mesh)
+        && sticks.includes(hoverRec))
+      hoverRec.mesh.material.emissive.setHex(0x000000);
+    hoverRec = null;
+  }
+  function updateHover(e){
+    const now = performance.now();
+    if (now - lastHoverT < 20) return;        // cap the raycast to ~50 Hz — hover latency is invisible
+    lastHoverT = now;
+    const picked = pickStick(e.clientX, e.clientY);
+    setHover(picked ? picked.rec : null);
+  }
+
+  // ---------- aim preview: a faint ghost of where a lifted stick will come to rest ----------
+  // Surface inference already rests a held stick at the cursor; when you SCROLL it up above that
+  // pose, the ghost surfaces the orientation-aware landing the solver has already computed, so you
+  // can line up a lean before letting go. (BUILD only; the RUN compound grab has no solved rest.)
+  const ghostMat = new THREE.MeshBasicMaterial({
+    color: 0xfff2d8, transparent: true, opacity: 0.16, depthWrite: false });
+  const ghostMeshes = [];
+  const _gc = new THREE.Vector3(), _gp = new THREE.Vector3(), _gq = new THREE.Quaternion();
+  function hideGhosts(){ for (const g of ghostMeshes) g.visible = false; }
+  function updateAimPreview(){
+    if (!(ctx.buildMode && heldGroup && liftY > 0.004)){ hideGhosts(); return; }
+    const restY = ctx.solveGroupDropY(smoothPos.x, smoothPos.z, heldQuat, heldGroup);   // rest pose, sans lift
+    _gc.set(smoothPos.x, restY, smoothPos.z);
+    let i = 0;
+    for (const m of heldGroup){
+      let g = ghostMeshes[i];
+      if (!g){
+        g = new THREE.Mesh(m.rec.mesh.geometry, ghostMat);   // share the stick's cached geometry
+        g.castShadow = g.receiveShadow = false; g.renderOrder = 2;
+        ctx.scene.add(g); ghostMeshes[i] = g;
+      } else g.geometry = m.rec.mesh.geometry;
+      _gp.copy(m.relPos).applyQuaternion(heldQuat).add(_gc);
+      _gq.copy(heldQuat).multiply(m.relQuat);
+      g.position.copy(_gp); g.quaternion.copy(_gq); g.visible = true;
+      i++;
+    }
+    for (; i < ghostMeshes.length; i++) ghostMeshes[i].visible = false;
   }
 
   renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -233,10 +330,10 @@ export async function boot() {
       return;
     }
 
-    const hits = raycaster.intersectObjects(stickMeshes, false);
-    if (!hits.length) return;                          // empty space -> OrbitControls (orbit/pan)
+    const picked = pickStick(e.clientX, e.clientY);    // exact hit, else the nearest thin stick within a few px
+    if (!picked) return;                               // truly empty space -> OrbitControls (orbit/pan)
     lastX = e.clientX; lastY = e.clientY;
-    grab(hits[0].object.userData.rec, e.button === 2 ? 'rotate' : 'move', hits[0].point);
+    grab(picked.rec, e.button === 2 ? 'rotate' : 'move', picked.point);
     controls.enabled = false;
   });
   renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());  // right-drag rotates; suppress menu
@@ -247,6 +344,8 @@ export async function boot() {
       const hits = raycaster.intersectObjects(stickMeshes, false);
       ctx.snipHover(hits.length ? hits[0].object.userData.rec : null, hits.length ? hits[0].point : null);
     }
+    if (!ctx.held && !ctx.glueMode && !ctx.snipMode) updateHover(e);   // pre-grab hover highlight
+    else clearHover();                                                 // held or a tool owns the glow
     if (keys['d'] && ctx.buildMode && !ctx.held) {     // plank-run: hold D + sweep the cursor
       const p = new THREE.Vector3();
       if (cursorSurfacePoint(p)) ctx.stampRun(p);
@@ -423,6 +522,7 @@ export async function boot() {
       else if (grabMode === 'rotate' && heldGroup)      // re-solve height as the pose tilts (no freeze-through-table)
         smoothPos.y = ctx.solveGroupDropY(smoothPos.x, smoothPos.z, heldQuat, heldGroup) + liftY;
     }
+    updateAimPreview();                                 // faint ghost of the resting pose while a lifted stick is held
 
     acc += frameDt;
     let n = 0;
