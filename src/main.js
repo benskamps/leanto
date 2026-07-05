@@ -16,6 +16,7 @@ export async function boot() {
   const { createTools }   = await import('./tools.js');
   const { createSave }    = await import('./save.js');
   const { createCharm }   = await import('./charm.js');
+  const { createMetrics } = await import('./metrics.js');
 
   const loadingEl = document.getElementById('loading');
   const hudEl = document.getElementById('hud');
@@ -31,6 +32,7 @@ export async function boot() {
   createTools(ctx);
   createSave(ctx);
   createCharm(ctx);
+  createMetrics(ctx);
   const { world, eventQueue, camera, renderer, controls, tableMesh,
           sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
 
@@ -48,7 +50,8 @@ export async function boot() {
       runWatch = { entries: sticks.map(s => ({ rec: s, p: s.currPos.clone() })),
                    elapsed: 0, driftTimer: 0, done: false,
                    tall: sticks.some(s => s.currPos.y > 0.03), bonded: ctx.joints.length > 0 };
-    } else runWatch = null;
+      ctx.metrics.onRunReveal();      // BUILD->RUN: count it + arm survival watch + one-tap rating
+    } else { runWatch = null; ctx.metrics.onBuildReturn(); }
   };
 
   // a few sticks laid flat on the table, ready to build with (BUILD mode is the default)
@@ -107,6 +110,7 @@ export async function boot() {
   const _mq = new THREE.Quaternion(), _mp = new THREE.Vector3();
   let grabPoses = null;                       // pre-grab poses of the whole group, for undo
   function grab(rec, mode, hitPoint){
+    ctx.metrics.onGrab(rec);                 // evidence loop: time-to-first-grab + re-grab count
     ctx.held = rec; grabMode = mode;
     liftY = 0;                                // each grab starts resting on the surface
     _heldMeshes.clear();
@@ -152,6 +156,7 @@ export async function boot() {
 
   function release(){
     const rec = ctx.held; ctx.held = null;
+    ctx.metrics.onRelease(rec);              // remember it, so an immediate re-grab reads as a correction
     const group = heldGroup; heldGroup = null;
     const body = ctx.heldBody; ctx.heldBody = null;
     _heldMeshes.clear();
@@ -164,6 +169,7 @@ export async function boot() {
         m.rec.body.setAngvel({ x:0, y:0, z:0 }, true);
       }
       ctx.lastPlaced = rec;                              // the stamp tool copies this one
+      if (ctx.buildMode) ctx.metrics.onPlace();          // a set-down on the BUILD table = a placement
       if (ctx.buildMode && grabPoses){
         const t = rec.body.translation(), g0 = grabPoses.find(g => g.rec === rec);
         if (g0 && (Math.hypot(t.x-g0.pos.x, t.y-g0.pos.y, t.z-g0.pos.z) > 1e-5 ||
@@ -517,6 +523,10 @@ export async function boot() {
     sweep(){ ctx.sweep(); },
     save(){ return ctx.serialize(); },
     load(json){ return ctx.loadScene(json); },
+    testScene(){ return ctx.testScene(); },        // the seeded lean-to as plain JSON
+    loadTest(){ return ctx.loadTestScene(); },      // load the seeded lean-to (reproducible)
+    metrics(){ return ctx.metrics.snapshot(); },    // read the local session evidence
+    rate(v){ return ctx.metrics.rate(v); },         // record a 👍/👎 feel rating ('up'|'down')
     stats(){
       let ridge = 0;
       for (const s of sticks) ridge = Math.max(ridge, s.currPos.y);
@@ -538,6 +548,15 @@ export async function boot() {
   loadingEl.style.display = 'none';
   hudEl.style.display = 'block';
   window.__leanto.ready = true;
+  ctx.metrics.onReady();                     // start the session clock (time-to-first-grab origin)
+
+  // seeded test scene via URL param: ?scene=leanto (or ?scene=test) loads the fixed
+  // three-stick lean-to so a before/after feel comparison starts from the same table.
+  try {
+    const want = new URLSearchParams(location.search).get('scene');
+    if (want === 'leanto' || want === 'test') ctx.loadTestScene();
+  } catch (err) { console.warn('leanto: test scene param failed —', err); }
+
   requestAnimationFrame(loop);
 
   // lightweight on-screen status
