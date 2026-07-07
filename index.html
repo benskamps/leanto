@@ -35,6 +35,9 @@
     background:rgba(58,46,34,.09); border:1px solid rgba(58,46,34,.18); border-bottom-width:2px;
     border-radius:4px; padding:1px 5px; }
   #hud .row { margin:2px 0; }
+  #hud-toggle { pointer-events:auto; cursor:pointer; color:#8a5a22; margin-top:8px;
+    font-style:italic; user-select:none; }
+  #hud-toggle:hover { text-decoration:underline; }
   #hud .test { margin-top:12px; padding:9px 11px; background:rgba(58,46,34,.06);
     border-left:3px solid #b07a3c; border-radius:0 6px 6px 0; }
   #hud .test b { color:#8a5a22; }
@@ -51,23 +54,24 @@
   <div id="hud" style="display:none">
     <h1>leanto</h1>
     <div class="sub">a table, some sticks, and gravity.</div>
-    <div class="row"><kbd>L-drag</kbd> a stick — pick up &amp; move (rests on whatever's under the cursor)</div>
-    <div class="row"><kbd>R-drag</kbd> a stick — rotate it (drag to spin &amp; tilt) · <kbd>Z</kbd><kbd>X</kbd> roll</div>
-    <div class="row"><kbd>scroll</kbd> while holding — lift / lower (release up high: it freezes there)</div>
-    <div class="row"><kbd>L-drag</kbd> empty — orbit · <kbd>R-drag</kbd> empty — pan · <kbd>scroll</kbd> zoom (to cursor)</div>
-    <div class="row"><kbd>1</kbd>–<kbd>4</kbd> camera angles — ¾ · front · side · top · <kbd>F</kbd> frame your build</div>
-    <div class="row"><kbd>release</kbd> — it freezes where you leave it, so you can prop the next stick</div>
-    <div class="row"><kbd>Space</kbd> new stick · <kbd>Shift+Space</kbd> half-stick · <kbd>M</kbd> mute · <kbd>Backspace</kbd> sweep</div>
-    <div class="row"><kbd>S</kbd> <b>SNIP</b> — hover a stick, click to cut it in two</div>
-    <div class="row"><kbd>D</kbd> <b>STAMP</b> — copy the last stick at the cursor · hold + sweep to lay a course</div>
-    <div class="row"><kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+S</kbd> save table · <kbd>Ctrl+O</kbd> open a saved one</div>
-    <div class="row"><kbd>P</kbd> photo mode (turntable) · <kbd>Shift+P</kbd> save a picture · ☀︎ dial, bottom-right</div>
-    <div class="row"><kbd>B</kbd> <b>BUILD ⇄ RUN</b> — RUN drops your structure into live physics</div>
-    <div class="row"><kbd>G</kbd> <b>GLUE</b> — click two sticks to bond them into a rigid assembly</div>
+    <div class="row"><kbd>L-drag</kbd> a stick — pick up &amp; move · <kbd>R-drag</kbd> — rotate (spin &amp; tilt)</div>
+    <div class="row"><kbd>scroll</kbd> while holding — lift · <kbd>release</kbd> — it freezes where you leave it</div>
+    <div class="row"><kbd>Space</kbd> new stick · <kbd>B</kbd> <b>BUILD ⇄ RUN</b> — drop it into live physics</div>
+    <div class="row"><kbd>drag</kbd> empty — orbit the camera · <kbd>1</kbd>–<kbd>4</kbd> angles · <kbd>F</kbd> frame your build</div>
+    <div id="hud-toggle" class="row"></div>
+    <div id="hud-more" style="display:none">
+      <div class="row"><kbd>G</kbd> <b>GLUE</b> — click two sticks to bond them into a rigid assembly</div>
+      <div class="row"><kbd>S</kbd> <b>SNIP</b> — hover a stick, click to cut it in two</div>
+      <div class="row"><kbd>D</kbd> <b>STAMP</b> — copy the last stick at the cursor · hold + sweep to lay a course</div>
+      <div class="row">while holding: <kbd>Q</kbd><kbd>E</kbd> spin · <kbd>R</kbd><kbd>F</kbd> tilt · <kbd>Z</kbd><kbd>X</kbd> roll</div>
+      <div class="row"><kbd>Shift+Space</kbd> half-stick · <kbd>M</kbd> mute · <kbd>Backspace</kbd> sweep the table</div>
+      <div class="row"><kbd>R-drag</kbd> empty — pan · <kbd>scroll</kbd> — zoom (toward the cursor)</div>
+      <div class="row"><kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+S</kbd> save table · <kbd>Ctrl+O</kbd> open a saved one</div>
+      <div class="row"><kbd>P</kbd> photo mode (turntable) · <kbd>Shift+P</kbd> save a picture · ☀︎ dial, bottom-right</div>
+    </div>
     <div class="test">
-      <b>The test:</b> you start in <b>BUILD</b> — grab sticks and prop a lean-to (each one holds where you
-      leave it). Then press <kbd>B</kbd> to drop into live physics and watch it stand — or fall.
-      Does that feel <b>satisfying</b>? That's the whole question.
+      <b>The test:</b> prop a lean-to — each stick holds where you leave it — then press
+      <kbd>B</kbd> and watch it stand, or fall. <b>Satisfying?</b> That's the whole question.
     </div>
     <div id="load-cottage" style="display:none;pointer-events:auto;cursor:pointer;margin-top:10px;
       font-family:ui-serif,Georgia,serif;font-style:italic;color:#8a5a22;">
@@ -76,6 +80,26 @@
   </div>
   <div id="status"></div>
   <div id="err"></div>
+
+<script>
+// progressive disclosure: four essential rows stay; everything else folds behind H.
+(() => {
+  const t = document.getElementById('hud-toggle'), m = document.getElementById('hud-more');
+  let open = localStorage.getItem('leanto.hudMore') === '1';
+  const render = () => {
+    m.style.display = open ? 'block' : 'none';
+    t.innerHTML = open ? '⌃ tuck the rest away — <kbd>H</kbd>'
+                       : '⌄ everything else (glue · snip · stamp …) — <kbd>H</kbd>';
+  };
+  t.addEventListener('click', () => { open = !open; localStorage.setItem('leanto.hudMore', open ? '1' : '0'); render(); });
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey && !e.repeat) {
+      open = !open; localStorage.setItem('leanto.hudMore', open ? '1' : '0'); render();
+    }
+  });
+  render();
+})();
+</script>
 
 <script type="importmap">
 {
