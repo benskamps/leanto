@@ -33,7 +33,9 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
 | **Z / X** | roll the held stick (keys are a quiet secondary control) |
 | **Release** | it freezes in place (BUILD) so you can prop the next stick; drops gently (RUN) |
 | **B** | toggle **BUILD ⇄ RUN** (RUN eases gravity in over ~1s — no slam) |
-| **Left-drag empty** | orbit camera · **Right-drag empty** | pan · **Scroll** | zoom |
+| **Left-drag empty** | orbit camera · **Right-drag empty** | pan · **Scroll** | zoom (toward the cursor) |
+| **1 – 4** | camera angles — ¾ · front · side · top (eased glide, fit to your build) |
+| **F** | frame the build — recentre + refit from your current angle |
 | **Space** | spawn a new stick at the cursor |
 | **Backspace** | sweep the table clean · **M** | mute / unmute the clatter |
 

@@ -17,6 +17,7 @@ export async function boot() {
   const { createSave }    = await import('./save.js');
   const { createCharm }   = await import('./charm.js');
   const { createMetrics } = await import('./metrics.js');
+  const { createCamera }  = await import('./camera.js');
 
   const loadingEl = document.getElementById('loading');
   const hudEl = document.getElementById('hud');
@@ -33,6 +34,7 @@ export async function boot() {
   createSave(ctx);
   createCharm(ctx);
   createMetrics(ctx);
+  createCamera(ctx);
   const { world, eventQueue, camera, renderer, controls, tableMesh,
           sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
 
@@ -408,6 +410,13 @@ export async function boot() {
       if (ctx.held) { release(); controls.enabled = true; grabMode = null; }  // set it down before the reveal
       ctx.setBuildMode(!ctx.buildMode);
     }
+    if (!ctx.held && !e.ctrlKey && !e.metaKey) {   // camera rig: canned angles + frame-the-build
+      if (e.key === '1') ctx.camGoto('hero');
+      if (e.key === '2') ctx.camGoto('front');
+      if (e.key === '3') ctx.camGoto('side');
+      if (e.key === '4') ctx.camGoto('top');
+      if (e.key.toLowerCase() === 'f' && !e.repeat) ctx.camFrame();
+    }
     if (e.key.toLowerCase() === 'g' && !e.repeat) { ctx.setSnipMode(false); ctx.setGlueMode(!ctx.glueMode); }
     if (e.key.toLowerCase() === 's' && !e.repeat) { ctx.setGlueMode(false); ctx.setSnipMode(!ctx.snipMode); }
     if (e.key.toLowerCase() === 'p' && !e.repeat && !e.ctrlKey && !e.metaKey) {
@@ -568,6 +577,7 @@ export async function boot() {
       }
     }
 
+    ctx.camUpdate(frameDt);                             // camera glides + tabletop pan clamp
     controls.update();
     renderer.render(ctx.scene, camera);
     window.__leanto.frames++;
