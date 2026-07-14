@@ -27,16 +27,19 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
 
 | Input | Action |
 |---|---|
-| **Left-drag a stick** | pick up & move — it rests on whatever's under the cursor (table or another stick) |
-| **Right-drag a stick** | rotate it — drag to spin & tilt (free, no snap) |
-| **Scroll while holding** | lift / lower the held stick (or assembly) above its resting pose |
-| **Z / X** | roll the held stick (keys are a quiet secondary control) |
+| **Click a stick** | select it and reveal its direct controls |
+| **Drag the stick** | pick up & move — it rests on whatever is under the cursor |
+| **Drag either amber end** | aim / tilt while the opposite end stays pinned |
+| **Drag ↑ above the stick** | lift / lower the stick or glued assembly; scroll while holding remains a shortcut |
+| **Drag the ring** | roll around the stick's long axis |
 | **Release** | it freezes in place (BUILD) so you can prop the next stick; drops gently (RUN) |
-| **B** | toggle **BUILD ⇄ RUN** (RUN eases gravity in over ~1s — no slam) |
-| **Left-drag empty** | orbit camera · **Right-drag empty** | pan · **Scroll** | zoom (toward the cursor) |
+| **BUILD / RUN** or **B** | toggle **BUILD ⇄ RUN** (RUN eases gravity in over ~1s — no slam) |
+| **Drag empty** | orbit camera · **Shift/middle-drag empty** | pan · **Scroll** | zoom toward the cursor |
 | **1 – 4** | camera angles — ¾ · front · side · top (eased glide, fit to your build) |
 | **F** | frame the build — recentre + refit from your current angle |
-| **Space** | spawn a new stick at the cursor |
+| **+ Stick** or **Space** | spawn a new stick at the last work-surface pointer |
+| **C, arrows, PageUp/Down, [ / ]** | select, move, lift, and roll from the keyboard; hold **R** with arrows to aim |
+| **Escape / Ctrl+Z** | cancel the active gesture exactly / undo the last BUILD action |
 | **Backspace** | sweep the table clean · **M** | mute / unmute the clatter |
 
 ## Design decisions (locked this session)
@@ -51,13 +54,14 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
   hand" while you prop the next stick. Press **B** for RUN: every stick flips to
   dynamic with gravity eased in over ~1s (zero-velocity flip, no launch-pop), and the
   structure stands or falls. (Besiege / Poly Bridge pattern.)
-- **Surface-inference placement.** No scroll-for-height. A held stick rests on
-  whatever's under the cursor (raycast against the table + placed sticks, sit at
-  `hit + normal·halfThickness`). The cursor *is* the position.
-- **Two-button manipulation, not modal.** Left-drag = move, right-drag = rotate.
-  Chosen over the research's full Blender-style modal (G/R) because that over-rotates
-  toward CAD for a craft table. Rotation is **free by default** (snapping stays off —
-  imperfection is the soul).
+- **Surface-inference placement.** A moved stick rests on whatever is under the
+  pointer. The lift handle temporarily raises it above that solved pose and shows a
+  translucent rest ghost, so height never becomes guesswork.
+- **The object carries its controls.** Selecting a stick reveals constant-screen-size
+  endpoint, lift, and roll handles. Orientation is still fully free—there is no grid or
+  angle snap—but the player manipulates something visible instead of memorizing an
+  invisible three-axis mouse mode. Right-drag rotation remains only as a temporary
+  compatibility binding.
 - **Stack:** Three.js + Rapier (compat/WASM), zero build step.
 - **Glue is phase 2.** When built: wet glue = temporary fixed-joint (repositionable);
   **dry glue = merge the two sticks into one compound rigid body** (this is what keeps

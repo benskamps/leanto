@@ -126,6 +126,7 @@ export function createSticks(ctx) {
     sticks.push(rec); stickMeshes.push(mesh);
     window.__leanto.sticks = sticks.length;
     if (ctx.buildMode) body.setBodyType(RAPIER.RigidBodyType.Fixed, true); // freeze-on-place: static, collidable, holds pose
+    ctx.refreshQueries();
     ctx.lastPlaced = rec;                    // the stamp tool copies the most recent stick
     return rec;
   }
@@ -136,6 +137,7 @@ export function createSticks(ctx) {
     if (ctx.dropBondsOf) ctx.dropBondsOf(rec);
     ctx.scene.remove(rec.mesh); rec.mesh.material.dispose();    // geometry is cached/shared — keep it
     if (rec.body){ ctx.recByBody.delete(rec.body.handle); ctx.world.removeRigidBody(rec.body); }
+    ctx.refreshQueries();
     sticks.splice(i, 1); stickMeshes.splice(stickMeshes.indexOf(rec.mesh), 1);
     window.__leanto.sticks = sticks.length;
   }
@@ -150,6 +152,7 @@ export function createSticks(ctx) {
     sticks.length = 0; stickMeshes.length = 0; ctx.recByBody.clear();
     ctx.held = null; ctx.heldBody = null; ctx.controls.enabled = true;
     window.__leanto.sticks = 0;
+    ctx.refreshQueries();
   }
 
   // build mode = the "third hand": freeze every stick so it holds while you place the next;
@@ -179,6 +182,7 @@ export function createSticks(ctx) {
       ctx.runRamp = 0;                                              // start the gentle Build->Run hand-off
     }
     window.__leanto.buildMode = on;
+    ctx.refreshQueries();
   }
 
   ctx.buildMode = true;     // BUILD (default) vs RUN

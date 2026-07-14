@@ -117,11 +117,12 @@ export function createMetrics(ctx) {
     feelPrompted = true;
     const el = document.createElement('div');
     el.style.cssText =
-      'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:11;' +
+      'position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:11;' +
       'display:flex;align-items:center;gap:10px;' +
       'font:12.5px ui-serif,Georgia,serif;font-style:italic;color:#3a2e22;' +
-      'background:rgba(58,46,34,.07);border:1px solid rgba(58,46,34,.18);' +
-      'border-radius:8px;padding:6px 12px;opacity:0;transition:opacity .5s;';
+      'background:rgba(247,240,229,.96);border:1px solid rgba(58,46,34,.18);' +
+      'border-radius:8px;padding:6px 12px;box-shadow:0 6px 20px rgba(38,23,10,.14);' +
+      'opacity:0;transition:opacity .5s;';
     const label = document.createElement('span');
     label.textContent = 'did it feel like you meant it?';
     el.appendChild(label);

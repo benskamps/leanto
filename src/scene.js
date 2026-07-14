@@ -16,12 +16,14 @@ export function createScene(ctx) {
 
   const renderer = new THREE.WebGLRenderer({ antialias:true });
   renderer.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.98;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.domElement.tabIndex = 0;
+  renderer.domElement.setAttribute('aria-label', 'Popsicle-stick workbench');
   document.body.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -46,7 +48,7 @@ export function createScene(ctx) {
   const key = new THREE.DirectionalLight('#fff1d8', 2.3);
   key.position.set(0.55, 1.05, 0.42);
   key.castShadow = true;
-  key.shadow.mapSize.set(4096, 4096);       // thin sticks want crisp contact shadows
+  key.shadow.mapSize.set(2048, 2048);       // interactive budget; photo mode may spend more
   const sd = 0.85;
   Object.assign(key.shadow.camera, { left:-sd, right:sd, top:sd, bottom:-sd, near:0.1, far:3.2 });
   key.shadow.bias = -0.0004;
@@ -141,7 +143,7 @@ export function createScene(ctx) {
   dial.type = 'range'; dial.min = '0'; dial.max = '1'; dial.step = '0.01'; dial.value = '0';
   dial.title = 'daylight — afternoon to evening';
   dial.id = 'daylight';
-  dial.style.cssText = 'position:fixed;right:14px;bottom:14px;width:120px;accent-color:#b07a3c;' +
+  dial.style.cssText = 'position:fixed;right:14px;bottom:82px;width:112px;accent-color:#b07a3c;' +
     'opacity:.65;cursor:pointer;z-index:5;';
   dial.addEventListener('input', () => setDaylight(parseFloat(dial.value)));
   document.body.appendChild(dial);
