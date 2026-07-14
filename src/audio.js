@@ -4,7 +4,9 @@
 // unglue pop, the deny thunk, and the survival chime.
 
 export function createAudio(ctx) {
-  let audioCtx = null, lowpass = null, muted = false, lastClack = 0;
+  let audioCtx = null, lowpass = null, lastClack = 0;
+  let muted = true;
+  try { muted = localStorage.getItem('leanto.muted') !== '0'; } catch (_) {}
 
   function ac(){
     if (!audioCtx){
@@ -107,5 +109,10 @@ export function createAudio(ctx) {
   ctx.pop = pop;
   ctx.deny = deny;
   ctx.chime = chime;
-  ctx.toggleMute = () => { muted = !muted; };
+  ctx.isMuted = () => muted;
+  ctx.toggleMute = () => {
+    muted = !muted;
+    try { localStorage.setItem('leanto.muted', muted ? '1' : '0'); } catch (_) {}
+    return muted;
+  };
 }

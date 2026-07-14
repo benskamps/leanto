@@ -16,6 +16,17 @@ export function createPhysics(ctx) {
   world.timestep = FIXED_DT;
 
   ctx.world = world;
+  ctx.refreshQueries = () => {
+    world.propagateModifiedBodyPositionsToColliders();
+    world.updateSceneQueries();
+    // Rapier 0.14 only inserts newly-created colliders into shape-cast queries on a
+    // world step. In frozen BUILD this is a one-off maintenance step per edit, not a loop.
+    if (ctx.buildMode && !ctx.held){
+      world.step(ctx.eventQueue);
+      ctx.eventQueue.drainCollisionEvents(() => {});
+      if (window.__leanto) window.__leanto.physSteps++;
+    }
+  };
   ctx.eventQueue = new RAPIER.EventQueue(true);
   ctx.FIXED_DT = FIXED_DT;
   ctx.MAX_SUBSTEPS = 6;

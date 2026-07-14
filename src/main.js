@@ -18,10 +18,12 @@ export async function boot() {
   const { createCharm }   = await import('./charm.js');
   const { createMetrics } = await import('./metrics.js');
   const { createCamera }  = await import('./camera.js');
+  const { createInteraction } = await import('./interaction.js');
+  const { createHandles } = await import('./handles.js');
+  const { createWorkbench } = await import('./workbench.js');
 
   const loadingEl = document.getElementById('loading');
-  const hudEl = document.getElementById('hud');
-  const statusEl = document.getElementById('status');
+  const workbenchEl = document.getElementById('workbench');
 
   const ctx = { THREE, RAPIER, held: null, heldBody: null };
   createPhysics(ctx);
@@ -35,6 +37,12 @@ export async function boot() {
   createCharm(ctx);
   createMetrics(ctx);
   createCamera(ctx);
+  createInteraction(ctx);
+  createHandles(ctx);
+  const workbench = createWorkbench(ctx);
+  let cottageScene = null;
+  const toggleAudio = () => workbench.setMuted(ctx.toggleMute());
+  workbench.setMuted(ctx.isMuted());
   const { world, eventQueue, camera, renderer, controls, tableMesh,
           sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
 
@@ -42,11 +50,22 @@ export async function boot() {
   const tweens = [];
   ctx.addTween = (dur, fn) => tweens.push({ t: 0, dur, fn });
 
+  function setActiveTool(tool){
+    const next = ['hand','glue','snip','stamp'].includes(tool) ? tool : 'hand';
+    const allowed = ctx.buildMode || next === 'hand' ? next : 'hand';
+    ctx.setGlueMode(allowed === 'glue');
+    ctx.setSnipMode(allowed === 'snip');
+    ctx.interaction.setTool(allowed);
+    if (allowed !== 'hand') selectRec(null);
+  }
+
   // survival celebration bookkeeping: snapshot the table at every RUN reveal
   let runWatch = null;                       // { entries:[{rec,p}], elapsed, driftTimer, done }
   const rawSetBuildMode = ctx.setBuildMode;
   ctx.setBuildMode = (on) => {
+    if (!on) setActiveTool('hand');
     rawSetBuildMode(on);
+    ctx.interaction.setWorld(on ? 'build' : 'run');
     if (!on){
       window.__leanto.maxDrift = 0;
       runWatch = { entries: sticks.map(s => ({ rec: s, p: s.currPos.clone() })),
@@ -75,6 +94,29 @@ export async function boot() {
   const heldQuat = new THREE.Quaternion();
   const targetPos = new THREE.Vector3();
   const smoothPos = new THREE.Vector3();
+  const SELECT_EMISSIVE = 0x241706;
+  let selectedRec = null;
+  let activePointerId = null;
+  let activeHandle = null;
+  let pendingGrab = null;
+  const orientPlane = new THREE.Plane();
+  const orientPivot = new THREE.Vector3();
+  const orientHit = new THREE.Vector3();
+  const orientDir = new THREE.Vector3();
+  const orientCurrent = new THREE.Vector3();
+  const orientNormal = new THREE.Vector3();
+  const orientDelta = new THREE.Quaternion();
+  let liftStartY = 0, liftStartValue = 0, liftWorldPerPx = 0.001;
+
+  function idleEmissive(rec){ return rec && rec === selectedRec ? SELECT_EMISSIVE : 0x000000; }
+  function selectRec(rec){
+    if (rec && !sticks.includes(rec)) rec = null;
+    const old = selectedRec; selectedRec = rec;
+    if (old && old !== ctx.held && sticks.includes(old)) old.mesh.material.emissive.setHex(0x000000);
+    if (rec && rec !== ctx.held) rec.mesh.material.emissive.setHex(SELECT_EMISSIVE);
+    ctx.interaction.select(rec ? rec.id : null);
+    ctx.handles.show(!!rec && ctx.interaction.state.tool === 'hand');
+  }
 
   function setNdc(e){
     ndc.x = (e.clientX/innerWidth)*2 - 1;
@@ -156,24 +198,35 @@ export async function boot() {
     });
   }
 
-  function release(){
+  function release(commit = true){
+    if (!commit && grabPoses){
+      for (const g of grabPoses){
+        if (!sticks.includes(g.rec) || g.rec.cured) continue;
+        g.rec.body.setTranslation({ x:g.pos.x, y:g.pos.y, z:g.pos.z }, true);
+        g.rec.body.setRotation({ x:g.quat.x, y:g.quat.y, z:g.quat.z, w:g.quat.w }, true);
+        g.rec.currPos.copy(g.pos); g.rec.prevPos.copy(g.pos);
+        g.rec.currQuat.copy(g.quat); g.rec.prevQuat.copy(g.quat);
+        g.rec.mesh.position.copy(g.pos); g.rec.mesh.quaternion.copy(g.quat);
+      }
+    }
     const rec = ctx.held; ctx.held = null;
-    ctx.metrics.onRelease(rec);              // remember it, so an immediate re-grab reads as a correction
+    if (commit) ctx.metrics.onRelease(rec);  // remember it, so an immediate re-grab reads as a correction
     const group = heldGroup; heldGroup = null;
     const body = ctx.heldBody; ctx.heldBody = null;
     _heldMeshes.clear();
     hoverRec = null; hideGhosts();            // drop the pre-grab highlight + aim ghost as the stick lands
+    ctx.interaction.endGesture(); activeHandle = null; activePointerId = null;
     if (group){
       for (const m of group){
-        m.rec.mesh.material.emissive.setHex(0x000000);
+        m.rec.mesh.material.emissive.setHex(idleEmissive(m.rec));
         if (ctx.buildMode){ m.rec.body.setBodyType(RAPIER.RigidBodyType.Fixed, true); continue; } // freeze-on-place
         m.rec.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
         m.rec.body.setLinvel({ x:0, y:0, z:0 }, true);   // zero velocity: no launch impulse
         m.rec.body.setAngvel({ x:0, y:0, z:0 }, true);
       }
       ctx.lastPlaced = rec;                              // the stamp tool copies this one
-      if (ctx.buildMode) ctx.metrics.onPlace();          // a set-down on the BUILD table = a placement
-      if (ctx.buildMode && grabPoses){
+      if (ctx.buildMode && commit) ctx.metrics.onPlace();// a set-down on the BUILD table = a placement
+      if (ctx.buildMode && commit && grabPoses){
         const t = rec.body.translation(), g0 = grabPoses.find(g => g.rec === rec);
         if (g0 && (Math.hypot(t.x-g0.pos.x, t.y-g0.pos.y, t.z-g0.pos.z) > 1e-5 ||
                    Math.abs(rec.currQuat.dot(g0.quat)) < 0.999999)){
@@ -191,13 +244,15 @@ export async function boot() {
         }
       }
       grabPoses = null;
+      ctx.refreshQueries();
       return;
     }
     // compound grab (RUN)
-    for (const s of sticks) if (s.cured && s.cured.body === body) s.mesh.material.emissive.setHex(0x000000);
+    for (const s of sticks) if (s.cured && s.cured.body === body) s.mesh.material.emissive.setHex(idleEmissive(s));
     body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
     body.setLinvel({ x:0, y:0, z:0 }, true);
     body.setAngvel({ x:0, y:0, z:0 }, true);
+    ctx.refreshQueries();
   }
 
   // ---------- pre-grab feedback: hover highlight + generous (screen-space) picking ----------
@@ -256,7 +311,7 @@ export async function boot() {
   function clearHover(){                       // never steal the held/glue glow off a stick, or touch a swept mesh
     if (hoverRec && hoverRec !== ctx.held && !_heldMeshes.has(hoverRec.mesh)
         && sticks.includes(hoverRec))
-      hoverRec.mesh.material.emissive.setHex(0x000000);
+      hoverRec.mesh.material.emissive.setHex(idleEmissive(hoverRec));
     hoverRec = null;
   }
   function updateHover(e){
@@ -301,10 +356,36 @@ export async function boot() {
     setNdc(e);
     raycaster.setFromCamera(ndc, camera);
 
+    // Selected-stick handles win before tools, stick bodies, or the camera. The target is
+    // captured for the whole gesture so a near-miss cannot turn into an orbit halfway through.
+    const handleHit = e.button === 0 && ctx.interaction.state.tool === 'hand' && selectedRec
+      ? ctx.handles.pick(raycaster) : null;
+    if (handleHit){
+      activeHandle = handleHit; activePointerId = e.pointerId;
+      grab(selectedRec, handleHit.kind === 'end' ? 'orient' : handleHit.kind, null);
+      controls.enabled = false;
+      try { renderer.domElement.setPointerCapture(e.pointerId); } catch (_) {}
+      const gesture = handleHit.kind === 'end' ? 'orient' : handleHit.kind;
+      ctx.interaction.beginGesture(gesture, 'handle', e.pointerType || 'mouse');
+      if (handleHit.kind === 'end'){
+        orientCurrent.set(1,0,0).applyQuaternion(heldQuat).normalize();
+        orientPivot.copy(smoothPos).addScaledVector(orientCurrent, -handleHit.sign * selectedRec.len/2);
+        camera.getWorldDirection(orientNormal);
+        orientPlane.setFromNormalAndCoplanarPoint(orientNormal, orientPivot);
+      } else if (handleHit.kind === 'lift'){
+        liftStartY = e.clientY; liftStartValue = smoothPos.y;
+        const dist = camera.position.distanceTo(smoothPos);
+        liftWorldPerPx = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov)/2) / innerHeight;
+      } else if (handleHit.kind === 'roll') lastX = e.clientX;
+      e.preventDefault(); e.stopImmediatePropagation();
+      return;
+    }
+
     if (ctx.snipMode) {                                // SNIP: click a hovered stick to cut it
       if (e.button === 2) return;
       const hits = raycaster.intersectObjects(stickMeshes, false);
       if (!hits.length) return;                        // empty space -> OrbitControls
+      e.preventDefault(); e.stopImmediatePropagation();
       ctx.snipHover(hits[0].object.userData.rec, hits[0].point);
       ctx.snip();
       return;
@@ -314,6 +395,7 @@ export async function boot() {
       if (e.button === 2) { ctx.clearGlueSel(); return; }
       const beadHits = raycaster.intersectObjects(ctx.beadMeshes, false);
       if (beadHits.length){
+        e.preventDefault(); e.stopImmediatePropagation();
         if (!ctx.buildMode) { ctx.deny(); return; }    // unglue is a BUILD-table action
         controls.enabled = false;
         const bond = beadHits[0].object.userData.bond;
@@ -327,6 +409,7 @@ export async function boot() {
       }
       const hits = raycaster.intersectObjects(stickMeshes, false);
       if (!hits.length) return;                        // empty space -> OrbitControls (orbit/pan)
+      e.preventDefault(); e.stopImmediatePropagation();
       controls.enabled = false;                        // hold the camera still during a pick
       ctx.gluePick(hits[0].object.userData.rec, hits[0].point);
       return;
@@ -334,13 +417,28 @@ export async function boot() {
 
     const picked = pickStick(e.clientX, e.clientY);    // exact hit, else the nearest thin stick within a few px
     if (!picked) return;                               // truly empty space -> OrbitControls (orbit/pan)
-    lastX = e.clientX; lastY = e.clientY;
-    grab(picked.rec, e.button === 2 ? 'rotate' : 'move', picked.point);
+    selectRec(picked.rec);
+    pendingGrab = { rec:picked.rec, mode:e.button === 2 ? 'rotate' : 'move', point:picked.point,
+      x:e.clientX, y:e.clientY, pointerId:e.pointerId, pointerType:e.pointerType || 'mouse' };
     controls.enabled = false;
-  });
+    activePointerId = e.pointerId;
+    try { renderer.domElement.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
   renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());  // right-drag rotates; suppress menu
   window.addEventListener('pointermove', (e) => {
-    setNdc(e);                              // track the cursor even when idle (Space spawns at it)
+    // Remember the last position over the work surface. Moving into the DOM tool rail must
+    // not silently move the placement cursor to the bottom of the table.
+    const overCanvas = e.target === renderer.domElement;
+    if (overCanvas || ctx.held || pendingGrab) setNdc(e);
+    if (!overCanvas && !ctx.held && !pendingGrab) return;
+    if (pendingGrab && e.pointerId === pendingGrab.pointerId){
+      if (Math.hypot(e.clientX-pendingGrab.x,e.clientY-pendingGrab.y) < 4) return;
+      const p = pendingGrab; pendingGrab = null;
+      lastX = e.clientX; lastY = e.clientY;
+      grab(p.rec,p.mode,p.point);
+      ctx.interaction.beginGesture(p.mode === 'rotate' ? 'orient' : 'move','stick',p.pointerType);
+    }
     if (ctx.snipMode && !ctx.held) {        // track the cut line under the cursor
       raycaster.setFromCamera(ndc, camera);
       const hits = raycaster.intersectObjects(stickMeshes, false);
@@ -353,7 +451,29 @@ export async function boot() {
       if (cursorSurfacePoint(p)) ctx.stampRun(p);
     }
     if (!ctx.held) return;
-    if (grabMode === 'rotate') {
+    if (grabMode === 'orient' && activeHandle){
+      raycaster.setFromCamera(ndc, camera);
+      if (raycaster.ray.intersectPlane(orientPlane, orientHit)){
+        orientDir.copy(orientHit).sub(orientPivot);
+        if (orientDir.lengthSq() > 1e-7){
+          orientDir.normalize();
+          orientCurrent.set(1,0,0).applyQuaternion(heldQuat).normalize();
+          orientDelta.setFromUnitVectors(orientCurrent, orientDir);
+          heldQuat.premultiply(orientDelta).normalize();
+          smoothPos.copy(orientPivot).addScaledVector(orientDir, activeHandle.sign * selectedRec.len/2);
+        }
+      }
+    } else if (grabMode === 'lift' && activeHandle){
+      smoothPos.y = Math.min(.65, Math.max(.002, liftStartValue + (liftStartY-e.clientY)*liftWorldPerPx));
+      if (heldGroup){
+        const rest = ctx.solveGroupDropY(smoothPos.x, smoothPos.z, heldQuat, heldGroup);
+        liftY = Math.max(0, smoothPos.y-rest);
+      }
+    } else if (grabMode === 'roll' && activeHandle){
+      const angle = (e.clientX-lastX)*.015;
+      heldQuat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), angle)).normalize();
+      lastX = e.clientX;
+    } else if (grabMode === 'rotate') {
       const k = 0.012;
       const dq = new THREE.Quaternion()
         .setFromAxisAngle(new THREE.Vector3(0, 1, 0), (e.clientX - lastX) * k)   // yaw  <- horizontal drag
@@ -362,9 +482,25 @@ export async function boot() {
       lastX = e.clientX; lastY = e.clientY;
     }
   });
-  window.addEventListener('pointerup', () => {
-    if (ctx.held) { release(); controls.enabled = true; grabMode = null; }
+  window.addEventListener('pointerup', (e) => {
+    if (pendingGrab && e.pointerId === pendingGrab.pointerId){
+      pendingGrab = null; activePointerId = null; controls.enabled = true;
+      try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
+      return;
+    }
+    if (ctx.held) {
+      release(); controls.enabled = true; grabMode = null;
+      try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
     else if (ctx.glueMode) { controls.enabled = true; }   // re-enable the camera after a glue pick
+  });
+  window.addEventListener('pointercancel', (e) => {
+    if (pendingGrab && e.pointerId === pendingGrab.pointerId){
+      pendingGrab = null; activePointerId = null; controls.enabled = true; return;
+    }
+    if (!ctx.held) return;
+    release(false); controls.enabled = true; grabMode = null;
+    try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
   });
   // wheel: zoom when idle (OrbitControls) — but while HOLDING, the camera is parked, so the
   // wheel becomes the y axis: scroll up lifts the held stick/assembly above its solved resting
@@ -377,27 +513,111 @@ export async function boot() {
     else smoothPos.y = Math.min(0.6, Math.max(0.002, smoothPos.y + step));   // compound grab (RUN)
   }, { passive: false, capture: true });
 
+  function addStickAtCursor(half = false){
+    const p = new THREE.Vector3();
+    const yaw = Math.random()*Math.PI;
+    const size = half
+      ? { len:ctx.STICK.L*(1+(Math.random()-.5)*.07)/2, ends:['round','square'] } : {};
+    let spawned = null;
+    if (ctx.buildMode){
+      if (!cursorSurfacePoint(p)) p.set((Math.random()-.5)*.1,0,(Math.random()-.5)*.1);
+      spawned = ctx.spawnStick(p.x,0,p.z,yaw,{ rest:true,...size });
+    } else if (cursorOnPlane(.16,p)) spawned = ctx.spawnStick(p.x,.16,p.z,yaw,size);
+    else spawned = ctx.spawnStick((Math.random()-.5)*.1,.16,(Math.random()-.5)*.1,yaw,size);
+    if (spawned){
+      selectRec(spawned);
+      if (ctx.buildMode) ctx.pushUndo(() => { if (selectedRec === spawned) selectRec(null); ctx.removeStick(spawned); });
+    }
+    return spawned;
+  }
+
+  function duplicateAtCursor(){
+    const p = new THREE.Vector3();
+    if (!cursorSurfacePoint(p)) return null;
+    const rec = ctx.stampAt(p);
+    if (rec) selectRec(rec);
+    return rec;
+  }
+
+  function cycleSelection(dir = 1){
+    if (!sticks.length){ selectRec(null); return; }
+    const at = selectedRec ? sticks.indexOf(selectedRec) : -1;
+    selectRec(sticks[(at + dir + sticks.length) % sticks.length]);
+  }
+
+  function setFixedPose(rec,pos,quat){
+    rec.body.setTranslation({ x:pos.x,y:pos.y,z:pos.z },true);
+    rec.body.setRotation({ x:quat.x,y:quat.y,z:quat.z,w:quat.w },true);
+    rec.currPos.copy(pos); rec.prevPos.copy(pos); rec.currQuat.copy(quat); rec.prevQuat.copy(quat);
+    rec.mesh.position.copy(pos); rec.mesh.quaternion.copy(quat);
+  }
+
+  function keyboardTransform({ delta = null, axis = null, angle = 0 }){
+    if (!ctx.buildMode || !selectedRec || selectedRec.cured) return false;
+    const group = ctx.assemblyOf(selectedRec);
+    const before = group.map(rec => ({ rec,pos:rec.currPos.clone(),quat:rec.currQuat.clone() }));
+    const root = selectedRec.currPos.clone();
+    const dq = axis ? new THREE.Quaternion().setFromAxisAngle(axis.clone().normalize(),angle) : null;
+    for (const item of before){
+      const pos = item.pos.clone(), quat = item.quat.clone();
+      if (delta) pos.add(delta);
+      if (dq){ pos.sub(root).applyQuaternion(dq).add(root); quat.premultiply(dq); }
+      setFixedPose(item.rec,pos,quat);
+    }
+    ctx.refreshQueries();
+    ctx.pushUndo(() => {
+      for (const item of before) if (sticks.includes(item.rec)) setFixedPose(item.rec,item.pos,item.quat);
+      ctx.refreshQueries();
+    });
+    ctx.metrics.onPlace();
+    return true;
+  }
+
   window.addEventListener('keydown', (e) => {
+    window.__leanto.lastKey = e.key;
     keys[e.key.toLowerCase()] = true;
+    if (e.key === 'Escape' && ctx.held){
+      e.preventDefault(); release(false); controls.enabled = true; grabMode = null; return;
+    }
+    if (e.key === 'Escape' && selectedRec){ e.preventDefault(); selectRec(null); return; }
+    if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.repeat){
+      e.preventDefault(); cycleSelection(e.shiftKey ? -1 : 1); return;
+    }
+    if (selectedRec && ctx.buildMode && !ctx.held){
+      const step = e.shiftKey ? .001 : .005;
+      const camRight = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion); camRight.y = 0; camRight.normalize();
+      const camForward = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion); camForward.y = 0; camForward.normalize();
+      let changed = false;
+      if (e.key.startsWith('Arrow')){
+        e.preventDefault();
+        if (keys['r']){
+          const axis = e.key === 'ArrowLeft' || e.key === 'ArrowRight'
+            ? new THREE.Vector3(0,1,0) : camRight;
+          const sign = e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? 1 : -1;
+          changed = keyboardTransform({ axis,angle:sign*(e.shiftKey ? .02 : .07) });
+        } else {
+          const delta = (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? camRight : camForward)
+            .multiplyScalar((e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 1)*step);
+          changed = keyboardTransform({ delta });
+        }
+      } else if (e.key === 'PageUp' || e.key === 'PageDown'){
+        e.preventDefault(); changed = keyboardTransform({ delta:new THREE.Vector3(0,e.key === 'PageUp'?step:-step,0) });
+      } else if (e.key === '[' || e.key === ']'){
+        e.preventDefault();
+        const axis = new THREE.Vector3(1,0,0).applyQuaternion(selectedRec.currQuat);
+        changed = keyboardTransform({ axis,angle:(e.key === '['?1:-1)*(e.shiftKey ? .02 : .07) });
+      }
+      if (changed) return;
+    }
     if (e.code === 'Space') {
       e.preventDefault();
-      const p = new THREE.Vector3();
-      const yaw = Math.random()*Math.PI;
-      const half = e.shiftKey                // Shift+Space: a half-stick — the picket-fence unit
-        ? { len: ctx.STICK.L * (1 + (Math.random()-0.5)*0.07) / 2, ends: ['round', 'square'] } : {};
-      let spawned = null;
-      if (ctx.buildMode) {                   // BUILD: the new stick rests on whatever's under the cursor
-        if (!cursorSurfacePoint(p)) p.set((Math.random()-0.5)*0.1, 0, (Math.random()-0.5)*0.1);
-        spawned = ctx.spawnStick(p.x, 0, p.z, yaw, { rest:true, ...half });
-      }
-      else if (cursorOnPlane(0.16, p)) spawned = ctx.spawnStick(p.x, 0.16, p.z, yaw);   // RUN: toss it in
-      else spawned = ctx.spawnStick((Math.random()-0.5)*0.1, 0.16, (Math.random()-0.5)*0.1, yaw);
-      if (spawned && ctx.buildMode) ctx.pushUndo(() => ctx.removeStick(spawned));
+      addStickAtCursor(e.shiftKey);
     }
     if (e.key.toLowerCase() === 'd' && !e.repeat && !ctx.held && !e.ctrlKey && !e.metaKey) {
       const p = new THREE.Vector3();          // stamp a copy of the last-placed stick
       if (cursorSurfacePoint(p)) ctx.stampAt(p);
       ctx.setStampRun(true);
+      ctx.interaction.setTool('stamp');
     }
     if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -405,7 +625,7 @@ export async function boot() {
     }
     if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ctx.downloadScene(); return; }
     if ((e.key === 'o' || e.key === 'O') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ctx.openScenePicker(); return; }
-    if (e.key.toLowerCase() === 'm') ctx.toggleMute();
+    if (e.key.toLowerCase() === 'm') toggleAudio();
     if (e.key.toLowerCase() === 'b' && !e.repeat) {
       if (ctx.held) { release(); controls.enabled = true; grabMode = null; }  // set it down before the reveal
       ctx.setBuildMode(!ctx.buildMode);
@@ -417,8 +637,9 @@ export async function boot() {
       if (e.key === '4') ctx.camGoto('top');
       if (e.key.toLowerCase() === 'f' && !e.repeat) ctx.camFrame();
     }
-    if (e.key.toLowerCase() === 'g' && !e.repeat) { ctx.setSnipMode(false); ctx.setGlueMode(!ctx.glueMode); }
-    if (e.key.toLowerCase() === 's' && !e.repeat) { ctx.setGlueMode(false); ctx.setSnipMode(!ctx.snipMode); }
+    if (e.key.toLowerCase() === 'g' && !e.repeat) setActiveTool(ctx.interaction.state.tool === 'glue' ? 'hand' : 'glue');
+    if (e.key.toLowerCase() === 's' && !e.repeat && !e.ctrlKey && !e.metaKey)
+      setActiveTool(ctx.interaction.state.tool === 'snip' ? 'hand' : 'snip');
     if (e.key.toLowerCase() === 'p' && !e.repeat && !e.ctrlKey && !e.metaKey) {
       if (e.shiftKey){                        // Shift+P: save a clean PNG of the current view
         renderer.render(ctx.scene, camera);
@@ -441,16 +662,37 @@ export async function boot() {
   let sweepArmedUntil = 0;
   window.addEventListener('keyup', (e) => {
     keys[e.key.toLowerCase()] = false;
-    if (e.key.toLowerCase() === 'd') ctx.setStampRun(false);
+    if (e.key.toLowerCase() === 'd') { ctx.setStampRun(false); setActiveTool('hand'); }
+  });
+
+  workbench.bind({
+    toggleMode(){
+      if (ctx.held){ release(); controls.enabled = true; grabMode = null; }
+      ctx.setBuildMode(!ctx.buildMode);
+    },
+    undo(){ ctx.undo(); },
+    toggleSound(){ toggleAudio(); },
+    addStick(){ addStickAtCursor(false); },
+    setTool(tool){
+      if (tool === 'stamp'){
+        setActiveTool('stamp');
+        duplicateAtCursor();
+        setActiveTool('hand');
+      } else setActiveTool(tool);
+    },
+    loadCottage(){
+      if (!cottageScene) return;
+      try { selectRec(null); ctx.loadScene(cottageScene); workbench.setHelp(false); }
+      catch (_) { ctx.deny(); }
+    },
   });
 
   let photoMode = false;
   function setPhotoMode(on){
     photoMode = on;
-    hudEl.style.display = on ? 'none' : 'block';
-    statusEl.style.display = on ? 'none' : 'block';
+    workbench.hide(on);
     ctx.daylightDial.style.display = on ? 'none' : 'block';
-    controls.autoRotate = on;
+    controls.autoRotate = on && !ctx.reducedMotion;
     controls.autoRotateSpeed = 0.8;
     window.__leanto.photoMode = on;
   }
@@ -533,16 +775,27 @@ export async function boot() {
     }
     updateAimPreview();                                 // faint ghost of the resting pose while a lifted stick is held
 
-    acc += frameDt;
+    const stableBuild = ctx.buildMode && !ctx.held && ctx.runRamp < 0;
+    if (stableBuild) acc = 0;
+    else acc += frameDt;
     let n = 0;
     while (acc >= FIXED_DT && n < MAX_SUBSTEPS){ stepOnce(); acc -= FIXED_DT; n++; }
-    if (n === MAX_SUBSTEPS) acc = 0;                    // badly throttled: drop the backlog, don't spiral
+    if (n === MAX_SUBSTEPS){
+      acc = 0;                                          // badly throttled: drop the backlog, don't spiral
+      window.__leanto.droppedBacklogs = (window.__leanto.droppedBacklogs || 0) + 1;
+    }
     const alpha = acc / FIXED_DT;
 
     for (const s of sticks) {
       s.mesh.position.lerpVectors(s.prevPos, s.currPos, alpha);
       s.mesh.quaternion.slerpQuaternions(s.prevQuat, s.currQuat, alpha);
     }
+    if (selectedRec && !sticks.includes(selectedRec)) selectRec(null);
+    if (selectedRec && ctx.interaction.state.tool === 'hand'){
+      const hp = ctx.held === selectedRec ? smoothPos : selectedRec.mesh.position;
+      const hq = ctx.held === selectedRec ? heldQuat : selectedRec.mesh.quaternion;
+      ctx.handles.update(selectedRec, hp, hq, camera);
+    } else ctx.handles.show(false);
 
     // charm layer: motes drift, confetti falls, light swells
     ctx.charmUpdate(frameDt);
@@ -613,6 +866,7 @@ export async function boot() {
       rec.currPos.set(pos[0], pos[1], pos[2]); rec.prevPos.copy(rec.currPos);
       rec.currQuat.copy(q); rec.prevQuat.copy(q);
       rec.mesh.position.copy(rec.currPos); rec.mesh.quaternion.copy(q);
+      ctx.refreshQueries();
       return true;
     },
     bond(idA, idB, at){                      // weld two sticks (authoring skips proximity checks)
@@ -637,6 +891,33 @@ export async function boot() {
     loadTest(){ return ctx.loadTestScene(); },      // load the seeded lean-to (reproducible)
     metrics(){ return ctx.metrics.snapshot(); },    // read the local session evidence
     rate(v){ return ctx.metrics.rate(v); },         // record a 👍/👎 feel rating ('up'|'down')
+    stress(count = 300){                            // deterministic loose-stick perf scene
+      ctx.setBuildMode(true); selectRec(null); ctx.sweep();
+      const total = Math.min(ctx.MAX_STICKS, Math.max(1, count|0));
+      for (let i=0;i<total;i++){
+        const x=-.52+(i%20)*.055, z=-.34+(Math.floor(i/20)%15)*.048, y=.002+(i%3)*.003;
+        ctx.spawnStick(x,y,z,(i%2)*Math.PI/2,{});
+      }
+      return window.__leanto.api.stats();
+    },
+    async measure(frames = 180){                    // p50/p95/p99, not a flattering average alone
+      frames = Math.min(1200,Math.max(30,frames|0));
+      const f0=window.__leanto.frames,p0=window.__leanto.physSteps;
+      const d0=window.__leanto.droppedBacklogs||0,t0=performance.now(),samples=[];
+      let prev=t0;
+      for(let i=0;i<frames;i++){
+        await new Promise(requestAnimationFrame); const now=performance.now();
+        samples.push(now-prev); prev=now;
+      }
+      const dt=(performance.now()-t0)/1000; samples.sort((a,b)=>a-b);
+      const at = p => samples[Math.min(samples.length-1,Math.floor(samples.length*p))];
+      return { frames, fps:+((window.__leanto.frames-f0)/dt).toFixed(2),
+        physicsHz:+((window.__leanto.physSteps-p0)/dt).toFixed(2),
+        p50:+at(.5).toFixed(2),p95:+at(.95).toFixed(2),p99:+at(.99).toFixed(2),
+        droppedBacklogs:(window.__leanto.droppedBacklogs||0)-d0,
+        drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,
+        sticks:sticks.length,bonds:ctx.joints.length,world:ctx.buildMode?'build':'run' };
+    },
     stats(){
       let ridge = 0;
       for (const s of sticks) ridge = Math.max(ridge, s.currPos.y);
@@ -646,17 +927,48 @@ export async function boot() {
     },
   };
 
-  // showcase: if the bundled cottage ships alongside, offer it in the HUD
+  // Concise, automation-friendly view of the same state a player sees.
+  window.render_game_to_text = () => JSON.stringify({
+    coordinateSystem:'metres; +x right across table, +y up, +z toward initial camera',
+    world:ctx.buildMode ? 'build' : 'run',
+    tool:ctx.interaction.state.tool,
+    gesture:ctx.interaction.state.gesture,
+    selectedId:selectedRec ? selectedRec.id : null,
+    sticks:sticks.slice(0,30).map(s => {
+      const screen = s.currPos.clone().project(camera);
+      return { id:s.id,
+        pos:[+s.currPos.x.toFixed(3),+s.currPos.y.toFixed(3),+s.currPos.z.toFixed(3)],
+        quat:[+s.currQuat.x.toFixed(3),+s.currQuat.y.toFixed(3),+s.currQuat.z.toFixed(3),+s.currQuat.w.toFixed(3)],
+        screen:[Math.round((screen.x*.5+.5)*innerWidth),Math.round((-screen.y*.5+.5)*innerHeight)],
+        selected:s === selectedRec };
+    }),
+    stickCount:sticks.length,
+    bonds:ctx.joints.length,
+    metrics:ctx.metrics.snapshot(),
+    handles:selectedRec ? Object.fromEntries([
+      ['endNeg',ctx.handles.endNeg],['endPos',ctx.handles.endPos],
+      ['lift',ctx.handles.lift],['roll',ctx.handles.roll],
+    ].map(([name,obj]) => {
+      const p = obj.position.clone().project(camera);
+      return [name,[Math.round((p.x*.5+.5)*innerWidth),Math.round((-p.y*.5+.5)*innerHeight)]];
+    })) : null,
+    camera:{ pos:camera.position.toArray().map(v=>+v.toFixed(3)),
+      target:controls.target.toArray().map(v=>+v.toFixed(3)) },
+  });
+  if (typeof window.advanceTime !== 'function')
+    window.advanceTime = ms => new Promise(resolve => setTimeout(resolve, Math.max(0,ms)));
+
+  // showcase: if the bundled cottage ships alongside, offer it in Help
   fetch('./assets/cottage.json').then(r => r.ok ? r.json() : null).then(cottage => {
     if (!cottage) return;
+    cottageScene = cottage;
     const el = document.getElementById('load-cottage');
     if (!el) return;
-    el.style.display = 'block';
-    el.addEventListener('click', () => { try { ctx.loadScene(cottage); } catch (_) { ctx.deny(); } });
+    el.hidden = false;
   }).catch(() => {});
 
   loadingEl.style.display = 'none';
-  hudEl.style.display = 'block';
+  workbenchEl.hidden = false;
   window.__leanto.ready = true;
   ctx.metrics.onReady();                     // start the session clock (time-to-first-grab origin)
 
@@ -675,6 +987,6 @@ export async function boot() {
     const glue = ctx.glueMode ? (ctx.glueArmed() ? ' · GLUE: pick 2nd stick or a bead' : ' · GLUE: pick a stick or a bead') : '';
     const snip = ctx.snipMode ? ' · SNIP: click a stick to cut' : '';
     const sweepHint = performance.now() < sweepArmedUntil ? ' · BACKSPACE AGAIN TO SWEEP' : '';
-    statusEl.textContent = `${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}${sweepHint}`;
+    workbench.setStatus(`${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}${sweepHint}`);
   }, 200);
 }

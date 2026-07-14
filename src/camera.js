@@ -5,6 +5,8 @@
 
 export function createCamera(ctx) {
   const { THREE, camera, controls } = ctx;
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  ctx.reducedMotion = reducedMotion;
 
   controls.zoomToCursor = true;             // zoom dives toward the cursor, not the orbit centre
 
@@ -35,6 +37,9 @@ export function createCamera(ctx) {
   let tween = null;                          // { t, dur, p0, p1, t0, t1 }
   const _p = new THREE.Vector3();
   function glideTo(pos, target, dur = 0.65){
+    if (reducedMotion){
+      camera.position.copy(pos); controls.target.copy(target); controls.update(); tween = null; return;
+    }
     tween = { t: 0, dur,
       p0: camera.position.clone(), p1: pos.clone(),
       t0: controls.target.clone(), t1: target.clone() };
