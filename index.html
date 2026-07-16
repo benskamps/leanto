@@ -99,7 +99,7 @@
     #mode-toggle { top:10px; padding:5px 6px 5px 10px; }
     .top-actions { right:10px; top:10px; gap:5px; }
     .top-actions .icon-button { width:34px; height:34px; }
-    #undo-button { display:none; }
+    #undo-button, #redo-button { display:none; }
     #context-hint { top:57px; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .tool-rail { bottom:10px; width:calc(100vw - 16px); justify-content:space-around; gap:0; padding:4px; }
     .tool { min-width:0; flex:1; height:48px; }
@@ -124,6 +124,7 @@
     </button>
     <div class="top-actions">
       <button id="undo-button" class="icon-button" type="button" aria-label="Undo" title="Undo">↶</button>
+      <button id="redo-button" class="icon-button" type="button" aria-label="Redo" title="Redo">↷</button>
       <button id="sound-toggle" class="icon-button" type="button" aria-label="Turn sound on" aria-pressed="true" title="Sound">♩</button>
       <button id="help-open" class="icon-button" type="button" aria-label="Open controls" aria-expanded="false" title="Controls">?</button>
     </div>

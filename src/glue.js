@@ -147,8 +147,9 @@ export function createGlue(ctx) {
     }
     if (rec === glueFirst){ clearGlueSel(); return; } // re-click the same stick: cancel
     if (bondKeys.has(key(glueFirst, rec)) || !inContact(glueFirst, rec)){ reject(rec); return; }
+    const snap = ctx.buildMode && ctx.snapshotScene ? ctx.snapshotScene() : null;
     const entry = bondSticks(glueFirst, rec, hitPoint);  // 2nd pick: weld the two
-    if (entry && ctx.pushUndo) ctx.pushUndo(() => removeBond(entry));
+    if (entry && snap && ctx.pushUndoSnapshot) ctx.pushUndoSnapshot(snap);
     glueFirst.mesh.material.emissive.setHex(0x000000);
     glueFirst = null;
   }

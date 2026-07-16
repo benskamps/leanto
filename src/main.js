@@ -152,7 +152,8 @@ export async function boot() {
   }
 
   const _mq = new THREE.Quaternion(), _mp = new THREE.Vector3();
-  let grabPoses = null;                       // pre-grab poses of the whole group, for undo
+  let grabPoses = null;                       // pre-grab poses of the whole group, for exact cancel
+  let grabSnap = null;                        // pre-grab scene snapshot, for undo/redo history
   function grab(rec, mode, hitPoint){
     ctx.metrics.onGrab(rec);                 // evidence loop: time-to-first-grab + re-grab count
     ctx.held = rec; grabMode = mode;
@@ -162,6 +163,7 @@ export async function boot() {
       const t = m.body.translation(), r = m.body.rotation();
       return { rec: m, pos: new THREE.Vector3(t.x, t.y, t.z), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w) };
     }) : null;
+    grabSnap = ctx.buildMode ? ctx.snapshotScene() : null;
 
     if (rec.cured){
       // RUN, dry assembly: grab the whole compound body and steer it
@@ -230,20 +232,10 @@ export async function boot() {
         const t = rec.body.translation(), g0 = grabPoses.find(g => g.rec === rec);
         if (g0 && (Math.hypot(t.x-g0.pos.x, t.y-g0.pos.y, t.z-g0.pos.z) > 1e-5 ||
                    Math.abs(rec.currQuat.dot(g0.quat)) < 0.999999)){
-          const poses = grabPoses;
-          ctx.pushUndo(() => {
-            for (const g of poses){
-              if (!ctx.sticks.includes(g.rec) || g.rec.cured) continue;
-              g.rec.body.setTranslation({ x:g.pos.x, y:g.pos.y, z:g.pos.z }, true);
-              g.rec.body.setRotation({ x:g.quat.x, y:g.quat.y, z:g.quat.z, w:g.quat.w }, true);
-              g.rec.currPos.copy(g.pos); g.rec.prevPos.copy(g.pos);
-              g.rec.currQuat.copy(g.quat); g.rec.prevQuat.copy(g.quat);
-              g.rec.mesh.position.copy(g.pos); g.rec.mesh.quaternion.copy(g.quat);
-            }
-          });
+          ctx.pushUndoSnapshot(grabSnap);    // pre-grab table; a no-op move never enters history
         }
       }
-      grabPoses = null;
+      grabPoses = null; grabSnap = null;
       ctx.refreshQueries();
       return;
     }
@@ -399,12 +391,9 @@ export async function boot() {
         if (!ctx.buildMode) { ctx.deny(); return; }    // unglue is a BUILD-table action
         controls.enabled = false;
         const bond = beadHits[0].object.userData.bond;
-        const { a, b } = bond;
-        const beadW = bond.bead.getWorldPosition(new THREE.Vector3());
+        const snap = ctx.snapshotScene();
         ctx.removeBond(bond);
-        ctx.pushUndo(() => {
-          if (ctx.sticks.includes(a) && ctx.sticks.includes(b)) ctx.bondSticks(a, b, beadW);
-        });
+        ctx.pushUndoSnapshot(snap);
         return;
       }
       const hits = raycaster.intersectObjects(stickMeshes, false);
@@ -518,6 +507,7 @@ export async function boot() {
     const yaw = Math.random()*Math.PI;
     const size = half
       ? { len:ctx.STICK.L*(1+(Math.random()-.5)*.07)/2, ends:['round','square'] } : {};
+    const snap = ctx.buildMode ? ctx.snapshotScene() : null;
     let spawned = null;
     if (ctx.buildMode){
       if (!cursorSurfacePoint(p)) p.set((Math.random()-.5)*.1,0,(Math.random()-.5)*.1);
@@ -526,7 +516,7 @@ export async function boot() {
     else spawned = ctx.spawnStick((Math.random()-.5)*.1,.16,(Math.random()-.5)*.1,yaw,size);
     if (spawned){
       selectRec(spawned);
-      if (ctx.buildMode) ctx.pushUndo(() => { if (selectedRec === spawned) selectRec(null); ctx.removeStick(spawned); });
+      if (ctx.buildMode) ctx.pushUndoSnapshot(snap);
     }
     return spawned;
   }
@@ -537,6 +527,15 @@ export async function boot() {
     const rec = ctx.stampAt(p);
     if (rec) selectRec(rec);
     return rec;
+  }
+
+  function deleteSelected(){
+    if (!ctx.buildMode || !selectedRec || selectedRec.cured || ctx.held) return false;
+    const snap = ctx.snapshotScene();
+    const rec = selectedRec; selectRec(null);
+    ctx.removeStick(rec);                    // dissolves its bonds too (bead pops)
+    ctx.pushUndoSnapshot(snap);
+    return true;
   }
 
   function cycleSelection(dir = 1){
@@ -554,6 +553,7 @@ export async function boot() {
 
   function keyboardTransform({ delta = null, axis = null, angle = 0 }){
     if (!ctx.buildMode || !selectedRec || selectedRec.cured) return false;
+    const snap = ctx.snapshotScene();
     const group = ctx.assemblyOf(selectedRec);
     const before = group.map(rec => ({ rec,pos:rec.currPos.clone(),quat:rec.currQuat.clone() }));
     const root = selectedRec.currPos.clone();
@@ -565,10 +565,7 @@ export async function boot() {
       setFixedPose(item.rec,pos,quat);
     }
     ctx.refreshQueries();
-    ctx.pushUndo(() => {
-      for (const item of before) if (sticks.includes(item.rec)) setFixedPose(item.rec,item.pos,item.quat);
-      ctx.refreshQueries();
-    });
+    ctx.pushUndoSnapshot(snap);
     ctx.metrics.onPlace();
     return true;
   }
@@ -580,6 +577,12 @@ export async function boot() {
       e.preventDefault(); release(false); controls.enabled = true; grabMode = null; return;
     }
     if (e.key === 'Escape' && selectedRec){ e.preventDefault(); selectRec(null); return; }
+    if (e.key === 'Delete' && selectedRec && !ctx.held){
+      e.preventDefault();
+      if (deleteSelected()) ctx.clack();
+      else ctx.deny();                       // deleting is a BUILD-table action
+      return;
+    }
     if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.repeat){
       e.preventDefault(); cycleSelection(e.shiftKey ? -1 : 1); return;
     }
@@ -620,8 +623,12 @@ export async function boot() {
       ctx.interaction.setTool('stamp');
     }
     if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();                     // undoing mid-hold would yank the stick from your hand
+      if (!ctx.held) { if (e.shiftKey) ctx.redo(); else ctx.undo(); }
+    }
+    if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      if (!ctx.held) ctx.undo();              // undoing mid-hold would yank the stick from your hand
+      if (!ctx.held) ctx.redo();
     }
     if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ctx.downloadScene(); return; }
     if ((e.key === 'o' || e.key === 'O') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ctx.openScenePicker(); return; }
@@ -671,6 +678,7 @@ export async function boot() {
       ctx.setBuildMode(!ctx.buildMode);
     },
     undo(){ ctx.undo(); },
+    redo(){ ctx.redo(); },
     toggleSound(){ toggleAudio(); },
     addStick(){ addStickAtCursor(false); },
     setTool(tool){
@@ -885,6 +893,11 @@ export async function boot() {
     },
     setMode(build){ ctx.setBuildMode(!!build); },
     sweep(){ ctx.sweep(); },
+    undo(){ ctx.undo(); return ctx.historyDepth(); },
+    redo(){ ctx.redo(); return ctx.historyDepth(); },
+    history(){ return ctx.historyDepth(); },
+    select(id){ const rec = byId(id); if (!rec) return false; selectRec(rec); return true; },
+    removeSelected(){ return deleteSelected(); },   // Delete-key path, scriptable for tests
     save(){ return ctx.serialize(); },
     load(json){ return ctx.loadScene(json); },
     testScene(){ return ctx.testScene(); },        // the seeded lean-to as plain JSON

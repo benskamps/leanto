@@ -8,13 +8,14 @@ export function createWorkbench(ctx) {
     root:q('workbench'), mode:q('mode-toggle'), modeLabel:q('mode-label'),
     hint:q('context-hint'), status:q('status'), help:q('help-panel'),
     helpOpen:q('help-open'), helpClose:q('help-close'), helpList:q('help-list'),
-    undo:q('undo-button'), sound:q('sound-toggle'), add:q('add-stick'), cottage:q('load-cottage'),
+    undo:q('undo-button'), redo:q('redo-button'), sound:q('sound-toggle'), add:q('add-stick'), cottage:q('load-cottage'),
     toolButtons:[...document.querySelectorAll('[data-tool]')],
   };
   let actions = {};
   const run = name => (...args) => { if (actions[name]) actions[name](...args); };
   els.mode.addEventListener('click', run('toggleMode'));
   els.undo.addEventListener('click', run('undo'));
+  els.redo.addEventListener('click', run('redo'));
   els.sound.addEventListener('click', run('toggleSound'));
   els.add.addEventListener('click', run('addStick'));
   els.cottage.addEventListener('click', run('loadCottage'));
@@ -63,7 +64,7 @@ export function createWorkbench(ctx) {
       b.classList.toggle('active', active); b.setAttribute('aria-pressed', active ? 'true' : 'false');
       b.disabled = !build && b.dataset.tool !== 'hand';
     }
-    els.add.disabled = false; els.undo.disabled = !build;
+    els.add.disabled = false; els.undo.disabled = !build; els.redo.disabled = !build;
   });
 
   function bind(next){ actions = next || {}; }

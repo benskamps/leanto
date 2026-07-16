@@ -66,6 +66,25 @@ Original prompt: "The floor is yours." — perform a full assessment and level-u
 - The required web-game client produced final screenshots/state with no console or page errors;
   direct Playwright flows supplied precise handle-drag coverage the burst client cannot express.
 
+## Implemented — command history completion (2026-07-16)
+
+- Undo is now snapshot-based: every mutation site captures a camera-less scene snapshot BEFORE the
+  change (grab, keyboard transform, spawn, stamp, snip, glue, unglue, delete) and history restores
+  through the same versioned save path a file-load uses. Bonds, tints, and lengths round-trip by
+  construction; the camera never moves on undo.
+- **Redo** exists: Ctrl/Cmd+Y and Ctrl/Cmd+Shift+Z, plus a workbench ↷ button beside Undo. A fresh
+  action forks history (the redo line dies). Both stacks flush at the RUN reveal, both deny in RUN
+  and mid-hold, both cap at 100 entries.
+- **Delete** exists: select a stick, press Delete — its glue bonds pop with it; one undo step brings
+  stick and bonds back. Registry rows added for Redo and Delete, so generated Help stays truthful.
+- Test hooks: `api.history()`, `api.undo()`, `api.redo()`, `api.select(id)`, `api.removeSelected()`.
+- Verified in headless Chromium against the seeded lean-to: 32/32 scripted checks pass (delete/undo/
+  redo round-trips incl. bonds, history fork, keyboard bindings, RUN flush, camera invariance, spawn
+  and snip paths) with zero console errors. At 300 sticks: pre-mutation snapshot ~1 ms in the gesture
+  path; undo/redo restore ~35–41 ms as a single discrete step on an explicit command.
+- Known trade: a restore respawns sticks, so runtime stick ids are reassigned (same semantics as
+  loading the Cottage or an autosave) and selection clears on undo.
+
 ## Remaining roadmap work
 
 - Observe Sprint #16/#17 with real uncoached players and compare corrections/control rating.
