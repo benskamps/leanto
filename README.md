@@ -39,7 +39,8 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
 | **F** | frame the build — recentre + refit from your current angle |
 | **+ Stick** or **Space** | spawn a new stick at the last work-surface pointer |
 | **C, arrows, PageUp/Down, [ / ]** | select, move, lift, and roll from the keyboard; hold **R** with arrows to aim |
-| **Escape / Ctrl+Z** | cancel the active gesture exactly / undo the last BUILD action |
+| **Escape / Ctrl+Z / Ctrl+Y** | cancel the active gesture exactly / undo / redo the last BUILD action |
+| **Delete** | remove the selected stick (its glue bonds pop; undo brings it all back) |
 | **Backspace** | sweep the table clean · **M** | mute / unmute the clatter |
 
 ## Design decisions (locked this session)

@@ -33,10 +33,10 @@ export function createSave(ctx) {
     };
   }
 
-  function loadScene(data){
+  function loadScene(data, opts = {}){
     if (!data || data.version !== VERSION) throw new Error(`unknown scene version ${data && data.version}`);
     if (!ctx.buildMode) ctx.setBuildMode(true);
-    if (ctx.clearUndo) ctx.clearUndo();
+    if (!opts.history && ctx.clearUndo) ctx.clearUndo();   // undo/redo restores keep their own stacks
     ctx.sweep();
     const byId = new Map();
     for (const d of data.sticks){
