@@ -32,13 +32,14 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
 | **Drag either amber end** | aim / tilt while the opposite end stays pinned |
 | **Drag ↑ above the stick** | lift / lower the stick or glued assembly; scroll while holding remains a shortcut |
 | **Drag the ring** | roll around the stick's long axis |
-| **Release** | it freezes in place (BUILD) so you can prop the next stick; drops gently (RUN) |
+| **Release** | it freezes in place (BUILD); in RUN it keeps your hand's momentum and falls freely |
 | **BUILD / RUN** or **B** | toggle **BUILD ⇄ RUN** (RUN eases gravity in over ~1s — no slam) |
 | **Drag empty** | orbit camera · **Shift/middle-drag empty** | pan · **Scroll** | zoom toward the cursor |
 | **1 – 4** | camera angles — ¾ · front · side · top (eased glide, fit to your build) |
 | **F** | frame the build — recentre + refit from your current angle |
 | **+ Stick** or **Space** | spawn a new stick at the last work-surface pointer |
 | **C, arrows, PageUp/Down, [ / ]** | select, move, lift, and roll from the keyboard; hold **R** with arrows to aim |
+| **K** | place an articulated ragdoll; switch to RUN, then grab and throw its limbs |
 | **Escape / Ctrl+Z / Ctrl+Y** | cancel the active gesture exactly / undo / redo the last BUILD action |
 | **Delete** | remove the selected stick (its glue bonds pop; undo brings it all back) |
 | **Backspace** | sweep the table clean · **M** | mute / unmute the clatter |
@@ -50,6 +51,8 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
   that *is* the product. (Gentle tip-magnetism is allowed later; grid/angle snapping is not.)
 - **Gravity = the grip metaphor**, not a cursor attractor. You hold the stick; you
   don't lure it.
+- **LIVE releases conserve intent.** RUN drags happen on a free hand plane; recent
+  linear and angular hand motion transfers to a released stick or ragdoll limb.
 - **BUILD ⇄ RUN with freeze-on-place.** Default is BUILD: a placed stick becomes a
   static (`Fixed`) body — holds its pose *and stays collidable*, so it's your "third
   hand" while you prop the next stick. Press **B** for RUN: every stick flips to
@@ -63,6 +66,9 @@ then press **B** to drop into live physics (**RUN**) and watch it stand or fall.
   angle snap—but the player manipulates something visible instead of memorizing an
   invisible three-axis mouse mode. Right-drag rotation remains only as a temporary
   compatibility binding.
+- **Ragdolls stay articulated.** The mannequin uses separate mass-bearing capsule and
+  sphere bodies, ball-and-socket shoulders/hips/neck, limited elbow/knee hinges, CCD,
+  friction, damping, and self-contact suppression only between adjacent linked parts.
 - **Stack:** Three.js + Rapier (compat/WASM), zero build step.
 - **Glue is phase 2.** When built: wet glue = temporary fixed-joint (repositionable);
   **dry glue = merge the two sticks into one compound rigid body** (this is what keeps

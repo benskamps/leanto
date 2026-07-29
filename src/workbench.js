@@ -8,7 +8,8 @@ export function createWorkbench(ctx) {
     root:q('workbench'), mode:q('mode-toggle'), modeLabel:q('mode-label'),
     hint:q('context-hint'), status:q('status'), help:q('help-panel'),
     helpOpen:q('help-open'), helpClose:q('help-close'), helpList:q('help-list'),
-    undo:q('undo-button'), redo:q('redo-button'), sound:q('sound-toggle'), add:q('add-stick'), cottage:q('load-cottage'),
+    undo:q('undo-button'), redo:q('redo-button'), sound:q('sound-toggle'), add:q('add-stick'),
+    ragdoll:q('add-ragdoll'), cottage:q('load-cottage'),
     toolButtons:[...document.querySelectorAll('[data-tool]')],
   };
   let actions = {};
@@ -18,6 +19,7 @@ export function createWorkbench(ctx) {
   els.redo.addEventListener('click', run('redo'));
   els.sound.addEventListener('click', run('toggleSound'));
   els.add.addEventListener('click', run('addStick'));
+  els.ragdoll.addEventListener('click', run('addRagdoll'));
   els.cottage.addEventListener('click', run('loadCottage'));
   for (const b of els.toolButtons) b.addEventListener('click', () => run('setTool')(b.dataset.tool));
 
@@ -49,6 +51,8 @@ export function createWorkbench(ctx) {
     if (s.gesture === 'lift') return 'Raise it; the ghost remembers the table.';
     if (s.gesture === 'roll') return 'Roll around the stick.';
     if (s.gesture === 'move') return 'Place it where your hand intends.';
+    if (typeof s.selection.primary === 'string' && s.selection.primary.startsWith('doll-'))
+      return 'Switch to RUN, then drag any limb.';
     if (s.selection.primary != null) return 'Drag an amber end to lean it. Arrow lifts; ring rolls.';
     return 'Drag a stick.';
   }
@@ -64,7 +68,8 @@ export function createWorkbench(ctx) {
       b.classList.toggle('active', active); b.setAttribute('aria-pressed', active ? 'true' : 'false');
       b.disabled = !build && b.dataset.tool !== 'hand';
     }
-    els.add.disabled = false; els.undo.disabled = !build; els.redo.disabled = !build;
+    els.add.disabled = false; els.ragdoll.disabled = !build;
+    els.undo.disabled = !build; els.redo.disabled = !build;
   });
 
   function bind(next){ actions = next || {}; }

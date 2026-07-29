@@ -92,3 +92,19 @@ Original prompt: "The floor is yours." — perform a full assessment and level-u
 - Profile/render-batch per-stick draw calls if lower-end hardware misses the new budget.
 - Complete explicit touch-device emulation and screen-reader audit.
 - Implement versioned share links, read-only opening, and Remix (#22).
+
+## Current request — ragdoll and freeform release physics (2026-07-28)
+
+- User asked for a realistic ragdoll plus freeform physics: a released stick should keep
+  behaving physically.
+- Added a dedicated articulated workshop mannequin with 10 independently simulated bodies,
+  5 spherical joints, and 4 limited anatomical hinges. It is placeable from the Doll rail
+  button or K, save/load and undo aware, frozen for posing safety in BUILD, and its
+  individual parts are grabbable in RUN.
+- LIVE/RUN grabs now preserve a recent measured linear and angular hand velocity on release
+  (including tangential velocity across multi-body grabs) instead of zeroing momentum.
+- Verified with the required web-game client plus direct Playwright flows: BUILD posture;
+  RUN collapse and sleep; limb throws with linear + angular momentum; ordinary-stick
+  horizontal release velocity followed by gravity; ragdoll undo/redo and serialized pose;
+  hidden-handle text-state parity; and a 390×844 rail/layout capture (no overflow).
+- Final required-client capture and every direct flow completed with zero console/page errors.

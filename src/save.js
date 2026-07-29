@@ -26,6 +26,7 @@ export function createSave(ctx) {
     return {
       version: VERSION,
       sticks, bonds,
+      ragdolls: ctx.serializeRagdolls ? ctx.serializeRagdolls() : [],
       camera: {
         pos: ctx.camera.position.toArray(),
         target: ctx.controls.target.toArray(),
@@ -51,13 +52,16 @@ export function createSave(ctx) {
       const a = byId.get(b.a), c = byId.get(b.b);
       if (a && c) ctx.bondSticks(a, c, new THREE.Vector3(b.bead[0], b.bead[1], b.bead[2]));
     }
+    for (const doll of (data.ragdolls || []))
+      if (ctx.spawnRagdoll) ctx.spawnRagdoll(0, 0, doll);
     if (data.camera){
       ctx.camera.position.fromArray(data.camera.pos);
       ctx.controls.target.fromArray(data.camera.target);
       ctx.controls.update();
     }
     ctx.lastPlaced = null;
-    return { sticks: ctx.sticks.length, bonds: ctx.joints.length };
+    return { sticks: ctx.sticks.length, bonds: ctx.joints.length,
+             ragdolls:ctx.ragdolls ? ctx.ragdolls.length : 0 };
   }
 
   function download(){

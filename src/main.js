@@ -12,6 +12,7 @@ export async function boot() {
   const { createAudio }   = await import('./audio.js');
   const { createSolver }  = await import('./solver.js');
   const { createSticks }  = await import('./sticks.js');
+  const { createRagdolls } = await import('./ragdoll.js');
   const { createGlue }    = await import('./glue.js');
   const { createTools }   = await import('./tools.js');
   const { createSave }    = await import('./save.js');
@@ -31,6 +32,7 @@ export async function boot() {
   createAudio(ctx);
   createSolver(ctx);
   createSticks(ctx);
+  createRagdolls(ctx);
   createGlue(ctx);
   createTools(ctx);
   createSave(ctx);
@@ -44,7 +46,8 @@ export async function boot() {
   const toggleAudio = () => workbench.setMuted(ctx.toggleMute());
   workbench.setMuted(ctx.isMuted());
   const { world, eventQueue, camera, renderer, controls, tableMesh,
-          sticks, stickMeshes, FIXED_DT, MAX_SUBSTEPS } = ctx;
+          sticks, stickMeshes, ragdolls, ragdollParts, ragdollMeshes,
+          FIXED_DT, MAX_SUBSTEPS } = ctx;
 
   // tiny tween system for the charm layer (bead pop-ins, etc.)
   const tweens = [];
@@ -108,14 +111,15 @@ export async function boot() {
   const orientDelta = new THREE.Quaternion();
   let liftStartY = 0, liftStartValue = 0, liftWorldPerPx = 0.001;
 
+  const isSelectable = rec => !!rec && (sticks.includes(rec) || ragdollParts.includes(rec));
   function idleEmissive(rec){ return rec && rec === selectedRec ? SELECT_EMISSIVE : 0x000000; }
   function selectRec(rec){
-    if (rec && !sticks.includes(rec)) rec = null;
+    if (rec && !isSelectable(rec)) rec = null;
     const old = selectedRec; selectedRec = rec;
-    if (old && old !== ctx.held && sticks.includes(old)) old.mesh.material.emissive.setHex(0x000000);
+    if (old && old !== ctx.held && isSelectable(old)) old.mesh.material.emissive.setHex(0x000000);
     if (rec && rec !== ctx.held) rec.mesh.material.emissive.setHex(SELECT_EMISSIVE);
     ctx.interaction.select(rec ? rec.id : null);
-    ctx.handles.show(!!rec && ctx.interaction.state.tool === 'hand');
+    ctx.handles.show(!!rec && !rec.articulated && ctx.interaction.state.tool === 'hand');
   }
 
   function setNdc(e){
@@ -137,6 +141,7 @@ export async function boot() {
     raycaster.setFromCamera(ndc, camera);
     _cands.length = 0;
     for (const m of stickMeshes) if (!_heldMeshes.has(m)) _cands.push(m);
+    for (const m of ragdollMeshes) if (!_heldMeshes.has(m)) _cands.push(m);
     _cands.push(tableMesh);
     const hits = raycaster.intersectObjects(_cands, false);
     if (hits.length){ out.copy(hits[0].point); return true; }
@@ -144,6 +149,11 @@ export async function boot() {
     return !!raycaster.ray.intersectPlane(plane, out);
   }
   function solveHeldTarget(out){
+    if (!ctx.buildMode) {
+      if (!cursorOnPlane(smoothPos.y, out)) return false;
+      out.x += grabOffset.x; out.z += grabOffset.z;
+      return true;                              // LIVE is a free hand plane, not a table placement solve
+    }
     if (!cursorSurfacePoint(out)) return false;
     out.x += grabOffset.x; out.z += grabOffset.z;   // keep the grabbed point under the cursor
     out.y = heldGroup ? ctx.solveGroupDropY(out.x, out.z, heldQuat, heldGroup) + liftY
@@ -154,6 +164,64 @@ export async function boot() {
   const _mq = new THREE.Quaternion(), _mp = new THREE.Vector3();
   let grabPoses = null;                       // pre-grab poses of the whole group, for exact cancel
   let grabSnap = null;                        // pre-grab scene snapshot, for undo/redo history
+  const motionSamples = [];                   // recent root targets, used to preserve throw momentum
+  const releaseLinear = new THREE.Vector3(), releaseAngular = new THREE.Vector3();
+  const _motionDelta = new THREE.Quaternion(), _motionInv = new THREE.Quaternion();
+  const _motionTarget = new THREE.Vector3();
+  function recordHeldMotion(pos = smoothPos, quat = heldQuat, now = performance.now()){
+    if (!ctx.heldBody) return;
+    const lastSample = motionSamples[motionSamples.length - 1];
+    if (lastSample && lastSample.pos.distanceToSquared(pos) < 1e-10 &&
+        Math.abs(lastSample.quat.dot(quat)) > .999999) return;
+    motionSamples.push({ t:now, pos:pos.clone(), quat:quat.clone() });
+    while (motionSamples.length > 2 && now - motionSamples[0].t > 180) motionSamples.shift();
+  }
+  function releaseVelocity(commit){
+    releaseLinear.set(0, 0, 0); releaseAngular.set(0, 0, 0);
+    if (!commit || !motionSamples.length) {
+      window.__leanto.lastReleaseMotion = { samples:motionSamples.length, linear:[0,0,0], angular:[0,0,0] };
+      return;
+    }
+    const newest = motionSamples[motionSamples.length - 1];
+    let oldest = newest;
+    for (let i = motionSamples.length - 2; i >= 0; i--){
+      const moved = newest.pos.distanceToSquared(motionSamples[i].pos) > 1e-9 ||
+                    Math.abs(newest.quat.dot(motionSamples[i].quat)) < .999999;
+      if (moved && newest.t - motionSamples[i].t > 18) { oldest = motionSamples[i]; break; }
+    }
+    const idleMs = performance.now() - newest.t;
+    const dt = Math.max(.016, (newest.t - oldest.t) / 1000);
+    if (oldest === newest || idleMs > 140) {
+      window.__leanto.lastReleaseMotion = {
+        samples:motionSamples.length, linear:[0,0,0], angular:[0,0,0],
+        idleMs, history:motionSamples.map(s => ({ t:s.t, pos:s.pos.toArray() })),
+      };
+      return;
+    }
+    const handoff = THREE.MathUtils.clamp(1 - idleMs / 160, 0, 1);
+    releaseLinear.subVectors(newest.pos, oldest.pos).multiplyScalar(1 / dt);
+    releaseLinear.multiplyScalar(handoff);
+    if (releaseLinear.length() > 1.8) releaseLinear.setLength(1.8);
+    _motionInv.copy(oldest.quat).invert();
+    _motionDelta.copy(newest.quat).multiply(_motionInv).normalize();
+    if (_motionDelta.w < 0) _motionDelta.set(
+      -_motionDelta.x, -_motionDelta.y, -_motionDelta.z, -_motionDelta.w);
+    const angle = 2 * Math.acos(THREE.MathUtils.clamp(_motionDelta.w, -1, 1));
+    const sinHalf = Math.sqrt(Math.max(0, 1 - _motionDelta.w * _motionDelta.w));
+    if (sinHalf > 1e-5 && angle > 1e-5)
+      releaseAngular.set(_motionDelta.x, _motionDelta.y, _motionDelta.z)
+        .multiplyScalar(angle * handoff / (sinHalf * dt));
+    if (releaseAngular.length() > 24) releaseAngular.setLength(24);
+    window.__leanto.lastReleaseMotion = {
+      samples:motionSamples.length,
+      linear:releaseLinear.toArray(),
+      angular:releaseAngular.toArray(),
+      spanMs:newest.t - oldest.t,
+      idleMs,
+      delta:newest.pos.clone().sub(oldest.pos).toArray(),
+      history:motionSamples.map(s => ({ t:s.t, pos:s.pos.toArray() })),
+    };
+  }
   function grab(rec, mode, hitPoint){
     ctx.metrics.onGrab(rec);                 // evidence loop: time-to-first-grab + re-grab count
     ctx.held = rec; grabMode = mode;
@@ -164,6 +232,7 @@ export async function boot() {
       return { rec: m, pos: new THREE.Vector3(t.x, t.y, t.z), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w) };
     }) : null;
     grabSnap = ctx.buildMode ? ctx.snapshotScene() : null;
+    motionSamples.length = 0;
 
     if (rec.cured){
       // RUN, dry assembly: grab the whole compound body and steer it
@@ -178,6 +247,7 @@ export async function boot() {
       for (const s of sticks) if (s.cured && s.cured.body === ctx.heldBody){
         s.mesh.material.emissive.setHex(0x3a2300); _heldMeshes.add(s.mesh);
       }
+      recordHeldMotion();
       return;
     }
 
@@ -198,9 +268,11 @@ export async function boot() {
       _heldMeshes.add(m.mesh);
       return { rec: m, relPos, relQuat };
     });
+    recordHeldMotion();
   }
 
   function release(commit = true){
+    releaseVelocity(commit);
     if (!commit && grabPoses){
       for (const g of grabPoses){
         if (!sticks.includes(g.rec) || g.rec.cured) continue;
@@ -223,10 +295,14 @@ export async function boot() {
         m.rec.mesh.material.emissive.setHex(idleEmissive(m.rec));
         if (ctx.buildMode){ m.rec.body.setBodyType(RAPIER.RigidBodyType.Fixed, true); continue; } // freeze-on-place
         m.rec.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-        m.rec.body.setLinvel({ x:0, y:0, z:0 }, true);   // zero velocity: no launch impulse
-        m.rec.body.setAngvel({ x:0, y:0, z:0 }, true);
+        const relWorld = m.relPos.clone().applyQuaternion(heldQuat);
+        const tangential = releaseAngular.clone().cross(relWorld);
+        const velocity = releaseLinear.clone().add(tangential);
+        m.rec.body.setLinvel({ x:velocity.x, y:velocity.y, z:velocity.z }, true);
+        m.rec.body.setAngvel({ x:releaseAngular.x, y:releaseAngular.y, z:releaseAngular.z }, true);
+        m.rec.body.wakeUp();
       }
-      ctx.lastPlaced = rec;                              // the stamp tool copies this one
+      if (!rec.articulated) ctx.lastPlaced = rec;        // the stamp tool only copies sticks
       if (ctx.buildMode && commit) ctx.metrics.onPlace();// a set-down on the BUILD table = a placement
       if (ctx.buildMode && commit && grabPoses){
         const t = rec.body.translation(), g0 = grabPoses.find(g => g.rec === rec);
@@ -242,8 +318,9 @@ export async function boot() {
     // compound grab (RUN)
     for (const s of sticks) if (s.cured && s.cured.body === body) s.mesh.material.emissive.setHex(idleEmissive(s));
     body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-    body.setLinvel({ x:0, y:0, z:0 }, true);
-    body.setAngvel({ x:0, y:0, z:0 }, true);
+    body.setLinvel({ x:releaseLinear.x, y:releaseLinear.y, z:releaseLinear.z }, true);
+    body.setAngvel({ x:releaseAngular.x, y:releaseAngular.y, z:releaseAngular.z }, true);
+    body.wakeUp();
     ctx.refreshQueries();
   }
 
@@ -288,21 +365,21 @@ export async function boot() {
     ndc.x = (cx/innerWidth)*2 - 1;
     ndc.y = -(cy/innerHeight)*2 + 1;
     raycaster.setFromCamera(ndc, camera);
-    const hits = raycaster.intersectObjects(stickMeshes, false);
+    const hits = raycaster.intersectObjects(stickMeshes.concat(ragdollMeshes), false);
     if (hits.length) return { rec: hits[0].object.userData.rec, point: hits[0].point };
     return nearestStick(cx, cy);
   }
   function setHover(rec){
     if (rec === hoverRec) return;
     clearHover();
-    if (rec && rec !== ctx.held && !_heldMeshes.has(rec.mesh)){
+    if (isSelectable(rec) && rec !== ctx.held && !_heldMeshes.has(rec.mesh)){
       rec.mesh.material.emissive.setHex(HOVER_EMISSIVE);
       hoverRec = rec;
     }
   }
   function clearHover(){                       // never steal the held/glue glow off a stick, or touch a swept mesh
     if (hoverRec && hoverRec !== ctx.held && !_heldMeshes.has(hoverRec.mesh)
-        && sticks.includes(hoverRec))
+        && isSelectable(hoverRec))
       hoverRec.mesh.material.emissive.setHex(idleEmissive(hoverRec));
     hoverRec = null;
   }
@@ -407,6 +484,10 @@ export async function boot() {
     const picked = pickStick(e.clientX, e.clientY);    // exact hit, else the nearest thin stick within a few px
     if (!picked) return;                               // truly empty space -> OrbitControls (orbit/pan)
     selectRec(picked.rec);
+    if (picked.rec.articulated && ctx.buildMode) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      return;                                          // pose-safe BUILD; limbs become physical handles in RUN
+    }
     pendingGrab = { rec:picked.rec, mode:e.button === 2 ? 'rotate' : 'move', point:picked.point,
       x:e.clientX, y:e.clientY, pointerId:e.pointerId, pointerType:e.pointerType || 'mouse' };
     controls.enabled = false;
@@ -470,6 +551,9 @@ export async function boot() {
       heldQuat.premultiply(dq);                        // rotate about world axes (free, no snap)
       lastX = e.clientX; lastY = e.clientY;
     }
+    if (grabMode === 'move' && solveHeldTarget(_motionTarget))
+      recordHeldMotion(_motionTarget);
+    else recordHeldMotion();
   });
   window.addEventListener('pointerup', (e) => {
     if (pendingGrab && e.pointerId === pendingGrab.pointerId){
@@ -500,6 +584,7 @@ export async function boot() {
     const step = -e.deltaY * 0.00022;
     if (heldGroup) liftY = Math.min(0.5, Math.max(0, liftY + step));
     else smoothPos.y = Math.min(0.6, Math.max(0.002, smoothPos.y + step));   // compound grab (RUN)
+    recordHeldMotion();
   }, { passive: false, capture: true });
 
   function addStickAtCursor(half = false){
@@ -529,11 +614,25 @@ export async function boot() {
     return rec;
   }
 
+  function addRagdollAtCursor(){
+    if (!ctx.buildMode) { ctx.deny(); return null; }
+    const p = new THREE.Vector3();
+    if (!cursorSurfacePoint(p)) p.set(0, 0, 0);
+    const snap = ctx.snapshotScene();
+    const doll = ctx.spawnRagdoll(p.x, p.z);
+    if (doll){
+      selectRec(doll.parts.find(part => part.name === 'torso') || doll.parts[0]);
+      ctx.pushUndoSnapshot(snap);
+    }
+    return doll;
+  }
+
   function deleteSelected(){
     if (!ctx.buildMode || !selectedRec || selectedRec.cured || ctx.held) return false;
     const snap = ctx.snapshotScene();
     const rec = selectedRec; selectRec(null);
-    ctx.removeStick(rec);                    // dissolves its bonds too (bead pops)
+    if (rec.articulated) ctx.removeRagdoll(rec.doll);
+    else ctx.removeStick(rec);               // dissolves its bonds too (bead pops)
     ctx.pushUndoSnapshot(snap);
     return true;
   }
@@ -552,7 +651,7 @@ export async function boot() {
   }
 
   function keyboardTransform({ delta = null, axis = null, angle = 0 }){
-    if (!ctx.buildMode || !selectedRec || selectedRec.cured) return false;
+    if (!ctx.buildMode || !selectedRec || selectedRec.cured || selectedRec.articulated) return false;
     const snap = ctx.snapshotScene();
     const group = ctx.assemblyOf(selectedRec);
     const before = group.map(rec => ({ rec,pos:rec.currPos.clone(),quat:rec.currQuat.clone() }));
@@ -616,6 +715,8 @@ export async function boot() {
       e.preventDefault();
       addStickAtCursor(e.shiftKey);
     }
+    if (e.key.toLowerCase() === 'k' && !e.repeat && !e.ctrlKey && !e.metaKey)
+      addRagdollAtCursor();
     if (e.key.toLowerCase() === 'd' && !e.repeat && !ctx.held && !e.ctrlKey && !e.metaKey) {
       const p = new THREE.Vector3();          // stamp a copy of the last-placed stick
       if (cursorSurfacePoint(p)) ctx.stampAt(p);
@@ -681,6 +782,7 @@ export async function boot() {
     redo(){ ctx.redo(); },
     toggleSound(){ toggleAudio(); },
     addStick(){ addStickAtCursor(false); },
+    addRagdoll(){ addRagdollAtCursor(); },
     setTool(tool){
       if (tool === 'stamp'){
         setActiveTool('stamp');
@@ -741,9 +843,11 @@ export async function boot() {
       const gs = Math.min(1, 0.25 + 0.94 * (ctx.runRamp / 0.8));
       for (const s of sticks) if (!s.cured && s.body && s !== ctx.held) s.body.setGravityScale(gs, true);
       for (const c of ctx.compounds) c.body.setGravityScale(gs, true);
+      for (const p of ragdollParts) if (p !== ctx.held) p.body.setGravityScale(gs, true);
       if (ctx.runRamp >= 0.8) ctx.runRamp = -1;
     }
     for (const s of sticks){ s.prevPos.copy(s.currPos); s.prevQuat.copy(s.currQuat); }
+    ctx.ragdollBeforeStep();
     world.step(eventQueue);
     eventQueue.drainCollisionEvents((h1, h2, started) => {
       if (!started) return;
@@ -769,6 +873,7 @@ export async function boot() {
         s.currPos.set(t.x, t.y, t.z); s.currQuat.set(r.x, r.y, r.z, r.w);
       }
     }
+    ctx.ragdollAfterStep();
     window.__leanto.physSteps++;
   }
 
@@ -778,9 +883,11 @@ export async function boot() {
     if (ctx.held) {
       applyHeldRotation();                              // keys remain a quiet secondary control (Z/X roll, etc.)
       if (grabMode === 'move' && solveHeldTarget(targetPos)) smoothPos.lerp(targetPos, 0.4);
-      else if (grabMode === 'rotate' && heldGroup)      // re-solve height as the pose tilts (no freeze-through-table)
+      else if (ctx.buildMode && grabMode === 'rotate' && heldGroup) // BUILD pose stays above the table
         smoothPos.y = ctx.solveGroupDropY(smoothPos.x, smoothPos.z, heldQuat, heldGroup) + liftY;
     }
+    if (ctx.held && (keys['q'] || keys['e'] || keys['r'] || keys['f'] || keys['z'] || keys['x']))
+      recordHeldMotion();
     updateAimPreview();                                 // faint ghost of the resting pose while a lifted stick is held
 
     const stableBuild = ctx.buildMode && !ctx.held && ctx.runRamp < 0;
@@ -798,8 +905,9 @@ export async function boot() {
       s.mesh.position.lerpVectors(s.prevPos, s.currPos, alpha);
       s.mesh.quaternion.slerpQuaternions(s.prevQuat, s.currQuat, alpha);
     }
-    if (selectedRec && !sticks.includes(selectedRec)) selectRec(null);
-    if (selectedRec && ctx.interaction.state.tool === 'hand'){
+    ctx.renderRagdolls(alpha);
+    if (selectedRec && !isSelectable(selectedRec)) selectRec(null);
+    if (selectedRec && !selectedRec.articulated && ctx.interaction.state.tool === 'hand'){
       const hp = ctx.held === selectedRec ? smoothPos : selectedRec.mesh.position;
       const hq = ctx.held === selectedRec ? heldQuat : selectedRec.mesh.quaternion;
       ctx.handles.update(selectedRec, hp, hq, camera);
@@ -864,6 +972,10 @@ export async function boot() {
       const rec = ctx.spawnStick(d.x || 0, d.y || 0, d.z || 0, d.yaw || 0, opts);
       return rec ? rec.id : null;
     },
+    ragdoll(d = {}){
+      const doll = ctx.spawnRagdoll(d.x || 0, d.z || 0);
+      return doll ? doll.id : null;
+    },
     place(id, pos, quat){                    // teleport a stick to an exact pose (stays frozen in BUILD)
       const rec = byId(id); if (!rec || rec.cured) return false;
       const q = quat ? new THREE.Quaternion(quat[0], quat[1], quat[2], quat[3]) : rec.currQuat;
@@ -896,7 +1008,10 @@ export async function boot() {
     undo(){ ctx.undo(); return ctx.historyDepth(); },
     redo(){ ctx.redo(); return ctx.historyDepth(); },
     history(){ return ctx.historyDepth(); },
-    select(id){ const rec = byId(id); if (!rec) return false; selectRec(rec); return true; },
+    select(id){
+      const rec = byId(id) || ragdollParts.find(part => part.id === id);
+      if (!rec) return false; selectRec(rec); return true;
+    },
     removeSelected(){ return deleteSelected(); },   // Delete-key path, scriptable for tests
     save(){ return ctx.serialize(); },
     load(json){ return ctx.loadScene(json); },
@@ -934,7 +1049,7 @@ export async function boot() {
     stats(){
       let ridge = 0;
       for (const s of sticks) ridge = Math.max(ridge, s.currPos.y);
-      return { sticks: sticks.length, bonds: ctx.joints.length, buildMode: ctx.buildMode,
+      return { sticks: sticks.length, bonds: ctx.joints.length, ragdolls:ragdolls.length, buildMode: ctx.buildMode,
                maxDrift: window.__leanto.maxDrift || 0, ridgeY: ridge,
                frames: window.__leanto.frames, physSteps: window.__leanto.physSteps };
     },
@@ -957,8 +1072,16 @@ export async function boot() {
     }),
     stickCount:sticks.length,
     bonds:ctx.joints.length,
+    ragdolls:ragdolls.map(doll => {
+      const head = doll.parts.find(part => part.name === 'head');
+      const torso = doll.parts.find(part => part.name === 'torso');
+      return { id:doll.id,
+        head:head ? head.currPos.toArray().map(v => +v.toFixed(3)) : null,
+        torso:torso ? torso.currPos.toArray().map(v => +v.toFixed(3)) : null,
+        awake:!ctx.buildMode && doll.parts.some(part => !part.body.isSleeping()) };
+    }),
     metrics:ctx.metrics.snapshot(),
-    handles:selectedRec ? Object.fromEntries([
+    handles:selectedRec && !selectedRec.articulated ? Object.fromEntries([
       ['endNeg',ctx.handles.endNeg],['endPos',ctx.handles.endPos],
       ['lift',ctx.handles.lift],['roll',ctx.handles.roll],
     ].map(([name,obj]) => {
@@ -1000,6 +1123,7 @@ export async function boot() {
     const glue = ctx.glueMode ? (ctx.glueArmed() ? ' · GLUE: pick 2nd stick or a bead' : ' · GLUE: pick a stick or a bead') : '';
     const snip = ctx.snipMode ? ' · SNIP: click a stick to cut' : '';
     const sweepHint = performance.now() < sweepArmedUntil ? ' · BACKSPACE AGAIN TO SWEEP' : '';
-    workbench.setStatus(`${sticks.length} sticks · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}${sweepHint}`);
+    const dolls = ragdolls.length ? ` · ${ragdolls.length} doll${ragdolls.length === 1 ? '' : 's'}` : '';
+    workbench.setStatus(`${sticks.length} sticks${dolls} · ${ctx.joints.length} glued · ${ctx.held ? 'holding' : mode}${glue}${snip}${sweepHint}`);
   }, 200);
 }
