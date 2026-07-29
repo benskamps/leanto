@@ -19,6 +19,8 @@ export const COMMANDS = [
     bindings:{ mouse:'scroll', touch:'pinch', keyboard:'+ / −' } },
   { id:'spawn', label:'Add stick', hint:'put another stick on the table',
     bindings:{ mouse:'+ Stick', touch:'+ Stick', keyboard:'Space' } },
+  { id:'ragdoll', label:'Add ragdoll', hint:'place an articulated workshop mannequin',
+    bindings:{ mouse:'+ Doll', touch:'+ Doll', keyboard:'K' } },
   { id:'glue', label:'Glue', hint:'choose two touching sticks',
     bindings:{ mouse:'Glue, then two sticks', touch:'Glue, then two sticks', keyboard:'G' } },
   { id:'snip', label:'Snip', hint:'choose where to cut',
