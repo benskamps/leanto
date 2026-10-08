@@ -74,6 +74,7 @@ export function createCamera(ctx) {
     t.y = Math.min(PAN.yMax, Math.max(0, t.y));
   }
 
+  ctx.camGlide = glideTo;
   ctx.camGoto = goto;
   ctx.camFrame = frame;
   ctx.camUpdate = update;

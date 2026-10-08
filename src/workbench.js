@@ -21,6 +21,7 @@ export function createWorkbench(ctx) {
   els.add.addEventListener('click', run('addStick'));
   els.ragdoll.addEventListener('click', run('addRagdoll'));
   els.cottage.addEventListener('click', run('loadCottage'));
+  els.cottage.addEventListener('click', () => { fresh = false; });
   for (const b of els.toolButtons) b.addEventListener('click', () => run('setTool')(b.dataset.tool));
 
   function setHelp(on){
@@ -42,7 +43,9 @@ export function createWorkbench(ctx) {
     els.helpList.appendChild(row);
   }
 
+  let fresh = true;                          // the opening invitation stays until the first touch
   function hintFor(s){
+    if (s.gesture !== 'idle' || s.selection.primary != null || s.world === 'run' || s.tool !== 'hand') fresh = false;
     if (s.world === 'run') return s.gesture === 'idle' ? 'Gravity is answering.' : 'Release to let go.';
     if (s.tool === 'glue') return 'Choose two touching sticks.';
     if (s.tool === 'snip') return 'Choose a cut on one stick.';
@@ -54,15 +57,14 @@ export function createWorkbench(ctx) {
     if (typeof s.selection.primary === 'string' && s.selection.primary.startsWith('doll-'))
       return 'Switch to RUN, then drag any limb.';
     if (s.selection.primary != null) return 'Drag an amber end to lean it. Arrow lifts; ring rolls.';
-    return 'Drag a stick.';
+    return fresh ? 'Pick up a stick and lean it on another. Then press Run.' : 'Drag a stick.';
   }
   ctx.interaction.subscribe(s => {
     const build = s.world === 'build';
     els.root.dataset.world = s.world; els.root.dataset.tool = s.tool;
-    // No aria-pressed: the visible label changes with the mode ("BUILD mode: RUN it" /
-    // "RUN mode: Freeze"), so the name already says the state and the action.
-    els.modeLabel.textContent = build ? 'BUILD' : 'RUN';
-    els.mode.querySelector('.mode-next').textContent = build ? 'RUN it' : 'Freeze';
+    // No aria-pressed: the name is the visible "Build Run" plus a spoken state and
+    // action ("…: building, press to run it"), so it says both without a toggle role.
+    els.modeLabel.textContent = build ? ': building, press to run it' : ': running, press to freeze';
     els.hint.textContent = hintFor(s);
     for (const b of els.toolButtons) {
       const active = b.dataset.tool === s.tool;

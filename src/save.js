@@ -97,17 +97,15 @@ export function createSave(ctx) {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || 'null'); } catch (_) {}
   if (saved && saved.version === VERSION && saved.sticks.length > 6){
-    const el = document.createElement('div');
-    el.textContent = `resume last table? (${saved.sticks.length} sticks)`;
-    el.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);' +
-      'font:12.5px ui-serif,Georgia,serif;font-style:italic;color:#3a2e22;cursor:pointer;' +
-      'background:rgba(58,46,34,.07);border:1px solid rgba(58,46,34,.18);border-radius:6px;' +
-      'padding:4px 12px;z-index:10;';
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'resume-chip';
+    el.textContent = `Resume your last table (${saved.sticks.length} sticks)`;
     el.addEventListener('click', () => {
       try { loadScene(saved); } catch (_) { ctx.deny(); }
       el.remove();
     });
-    document.body.appendChild(el);
+    (document.getElementById('workbench') || document.body).appendChild(el);
     setTimeout(() => el.remove(), 20000);    // fades from relevance once you start building
   }
 
