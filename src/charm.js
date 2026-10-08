@@ -188,8 +188,7 @@ export function createCharm(ctx) {
     if (swellT >= 0){
       swellT += dt;
       const k = Math.sin(Math.min(1, swellT/1.6) * Math.PI);   // up and back down
-      ctx.keyLight.intensity = (ctx.daylight != null
-        ? THREE.MathUtils.lerp(2.3, 1.7, ctx.daylight) : 2.3) * (1 + 0.45*k);
+      ctx.keyLight.intensity = ctx.keyBase() * (1 + 0.45*k);
       if (swellT >= 1.6) swellT = -1;
     }
   }

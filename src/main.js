@@ -78,11 +78,12 @@ export async function boot() {
     } else { runWatch = null; ctx.metrics.onBuildReturn(); }
   };
 
-  // a few sticks laid flat on the table, ready to build with (BUILD mode is the default)
-  for (let i=0;i<6;i++){
-    const a = Math.random()*Math.PI*2, r = 0.05 + Math.random()*0.14;
-    ctx.spawnStick(Math.cos(a)*r, 0, Math.sin(a)*r, Math.random()*Math.PI, { rest:true });
-  }
+  // six sticks set out on the cutting mat like a fresh craft kit: a loose fanned
+  // bundle and a pair already crossed, ready to lean. Fixed layout, so the first
+  // frame (and the card photo) is the same every visit. BUILD is the default mode.
+  for (const [x, z, yaw] of [[-0.085,0.030,0.30],[-0.080,0.046,0.22],[-0.074,0.062,0.13],[-0.066,0.079,0.03],
+                              [0.070,0.020,-0.62],[0.074,0.026,0.66]])
+    ctx.spawnStick(x, 0, z, yaw, { rest:true });
 
   // ---------- pick / hold model ----------
   const raycaster = new THREE.Raycaster();
@@ -672,6 +673,7 @@ export async function boot() {
   window.addEventListener('keydown', (e) => {
     window.__leanto.lastKey = e.key;
     keys[e.key.toLowerCase()] = true;
+    if (e.target.closest?.('input, select, textarea, [contenteditable]')) return;   // the daylight slider owns its keys
     if (e.key === 'Escape' && ctx.held){
       e.preventDefault(); release(false); controls.enabled = true; grabMode = null; return;
     }
@@ -711,7 +713,9 @@ export async function boot() {
       }
       if (changed) return;
     }
-    if (e.code === 'Space') {
+    // Space on a focused button or slider is that control's own key — let it press the
+    // button rather than also dropping a stick on the table.
+    if (e.code === 'Space' && !e.target.closest?.('button, input, select, textarea, a[href], [contenteditable]')) {
       e.preventDefault();
       addStickAtCursor(e.shiftKey);
     }
@@ -801,7 +805,6 @@ export async function boot() {
   function setPhotoMode(on){
     photoMode = on;
     workbench.hide(on);
-    ctx.daylightDial.style.display = on ? 'none' : 'block';
     controls.autoRotate = on && !ctx.reducedMotion;
     controls.autoRotateSpeed = 0.8;
     window.__leanto.photoMode = on;
@@ -1102,6 +1105,14 @@ export async function boot() {
     if (!el) return;
     el.hidden = false;
   }).catch(() => {});
+
+  // the opening shot: drift down from the room onto the kit, then hand over the camera
+  const OPEN_TARGET = new THREE.Vector3(-0.005, 0.004, 0.05);
+  const OPEN_POS = new THREE.Vector3(0.24, 0.21, 0.38)          // pulled back on a tall phone screen
+    .multiplyScalar(Math.max(1, Math.pow(camera.aspect, -0.85))).add(OPEN_TARGET);
+  controls.target.copy(OPEN_TARGET);
+  camera.position.set(0.52, 0.62, 0.98);
+  ctx.camGlide(OPEN_POS, OPEN_TARGET, 2.4);
 
   loadingEl.style.display = 'none';
   workbenchEl.hidden = false;

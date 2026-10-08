@@ -108,3 +108,27 @@ Original prompt: "The floor is yours." — perform a full assessment and level-u
   horizontal release velocity followed by gravity; ragdoll undo/redo and serialized pose;
   hidden-handle text-state parity; and a 390×844 rail/layout capture (no overflow).
 - Final required-client capture and every direct flow completed with zero console/page errors.
+
+## Visual level-up — window light, cutting mat, a room (2026-10-08)
+
+- The key light is now a far spotlight with a painted cookie: four-plus-two window panes and a
+  trailing pothos on the sill, so a pool of dappled late-afternoon light falls across the table.
+  In the evening the cookie becomes one round lamp pool and the light moves to a desk lamp.
+- The sky is a painted dome (gradient + sun glow, dithered); a prefiltered environment
+  (PMREM of a warm room with one bright window) gives wood a sheen and the glass jar reflections.
+  Nothing is downloaded: every texture is drawn on a canvas at boot from a seeded PRNG.
+- The table is walnut planks with knots and seams; a sage self-healing cutting mat (A3, 1 cm grid,
+  45°/60° guides, old knife scores) is painted onto its top. The table has legs, a rug and a
+  floor that fades into haze. The floor has a static collider, so a stick knocked off the table
+  lands instead of falling forever. No other physics changed.
+- Sticks: four birch grain variants with a matching bump map, so a pile never looks stamped.
+- Chrome: BUILD ⇄ RUN is a two-position switch with a sliding thumb (rust in RUN) and a B key
+  cap; the daylight dial is a vertical sun-to-moon slider; the brand sits on a paper card; the
+  resume prompt is a real button; the loader is two sticks leaning; a soft vignette deepens at dusk.
+- Opening frame: six sticks laid out like a fresh kit (a fanned bundle and a crossed pair), a
+  2.4 s camera drift onto them (skipped under reduced motion), and an invitation hint until the
+  first touch. On a tall phone the camera pulls back so both groups fit.
+- Fix: Space on a focused button or slider no longer also adds a stick.
+- Verified in headless Chromium under the site's enforced CSP (with 'wasm-unsafe-eval'): boot
+  shows 6 sticks, zero CSP violations, zero console errors; Space on the Help button opens Help
+  with 6 sticks; Space on the canvas still adds one; the cottage loads (134 sticks).

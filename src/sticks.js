@@ -6,26 +6,54 @@ import * as THREE from './vendor/three/three.module.min.js';
 export function createSticks(ctx) {
   const { RAPIER } = ctx;
 
-  // ---------- wood grain texture ----------
-  function makeGrain() {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  // ---------- wood grain: four birch variants, so a pile of sticks never looks stamped ----------
+  // Fine straight fibres, a few darker growth lines, ray flecks, and a matching bump
+  // map so the grain catches the window light when a stick tilts.
+  function makeGrain(seed) {
+    let s = seed;
+    const r = () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+    const c = document.createElement('canvas'); c.width = 512; c.height = 64;
     const g = c.getContext('2d');
-    g.fillStyle = '#d8b478'; g.fillRect(0,0,256,64);
-    for (let i=0;i<80;i++){
-      g.strokeStyle = `rgba(110,72,36,${0.03 + Math.random()*0.10})`;
-      g.lineWidth = 0.4 + Math.random()*1.3;
-      const y = Math.random()*64;
+    const b = document.createElement('canvas'); b.width = 512; b.height = 64;
+    const bg = b.getContext('2d');
+    g.fillStyle = '#dcbb83'; g.fillRect(0,0,512,64);
+    bg.fillStyle = '#808080'; bg.fillRect(0,0,512,64);
+    const across = g.createLinearGradient(0,0,0,64);      // heartwood side is a shade warmer
+    across.addColorStop(0, 'rgba(150,95,40,0.10)'); across.addColorStop(1, 'rgba(255,240,210,0.06)');
+    g.fillStyle = across; g.fillRect(0,0,512,64);
+    for (let i=0;i<150;i++){                              // fibres
+      const y = r()*64, a = 0.025 + r()*0.08, w = 0.35 + r()*1.0, dark = r() < 0.75;
+      g.strokeStyle = dark ? `rgba(120,76,34,${a})` : `rgba(255,236,200,${a})`;
+      bg.strokeStyle = dark ? `rgba(40,40,40,${a*2.2})` : `rgba(220,220,220,${a*1.6})`;
+      g.lineWidth = bg.lineWidth = w;
+      const amp = 0.4 + r()*1.4, f = 0.004 + r()*0.01, ph = r()*6;
+      for (const k of [g, bg]){
+        k.beginPath();
+        for (let x=0;x<=512;x+=16){ const yy = y + Math.sin(x*f + ph)*amp; x ? k.lineTo(x,yy) : k.moveTo(x,yy); }
+        k.stroke();
+      }
+    }
+    for (let i=0;i<3;i++){                                // growth lines
+      const y = 6 + r()*52;
+      g.strokeStyle = `rgba(105,62,24,${0.12 + r()*0.12})`; g.lineWidth = 1 + r()*1.2;
       g.beginPath(); g.moveTo(0,y);
-      for (let x=0;x<=256;x+=14) g.lineTo(x, y + (Math.random()-0.5)*2.6);
+      for (let x=0;x<=512;x+=16) g.lineTo(x, y + Math.sin(x*0.006 + i)*2.5);
       g.stroke();
+    }
+    for (let i=0;i<40;i++){                               // ray flecks
+      const x = r()*512, y = r()*64;
+      g.fillStyle = `rgba(150,96,46,${0.10 + r()*0.15})`;
+      g.fillRect(x, y, 2 + r()*5, 0.8);
     }
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.anisotropy = 4;
-    return t;
+    const bt = new THREE.CanvasTexture(b);
+    bt.wrapS = bt.wrapT = THREE.RepeatWrapping;
+    return { map: t, bump: bt };
   }
-  const grain = makeGrain();
+  const grains = [11, 23, 37, 51].map(makeGrain);
 
   const STICK_L = 0.114, STICK_W = 0.010, STICK_T = 0.002; // real popsicle-stick metres
   const sticks = [];        // { id, mesh, body, cured, halfExtents, prev/curr pose pair }
@@ -103,9 +131,10 @@ export function createSticks(ctx) {
       0.60 + (Math.random()-0.5)*0.13
     );
     const rough = opts.rough != null ? opts.rough : 0.66 + Math.random()*0.16;
+    const grain = grains[nextId % grains.length];
     const mat = new THREE.MeshStandardMaterial({
-      map: grain, color: tint, roughness: rough, metalness: 0,
-      emissive: 0x000000
+      map: grain.map, bumpMap: grain.bump, bumpScale: 0.6, color: tint, roughness: rough, metalness: 0,
+      emissive: 0x000000, envMapIntensity: 0.7
     });
     const mesh = new THREE.Mesh(makeStickGeometry(len, ends[0], ends[1]), mat);
     mesh.castShadow = true; mesh.receiveShadow = true;
