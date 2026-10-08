@@ -10,7 +10,7 @@ export function createWorkbench(ctx) {
     helpOpen:q('help-open'), helpClose:q('help-close'), helpList:q('help-list'),
     undo:q('undo-button'), redo:q('redo-button'), sound:q('sound-toggle'), add:q('add-stick'),
     ragdoll:q('add-ragdoll'), cottage:q('load-cottage'),
-    toolButtons:[...document.querySelectorAll('[data-tool]')],
+    toolButtons:[...document.querySelectorAll('.tool[data-tool]')],  // not #workbench, which carries data-tool too
   };
   let actions = {};
   const run = name => (...args) => { if (actions[name]) actions[name](...args); };
@@ -59,7 +59,8 @@ export function createWorkbench(ctx) {
   ctx.interaction.subscribe(s => {
     const build = s.world === 'build';
     els.root.dataset.world = s.world; els.root.dataset.tool = s.tool;
-    els.mode.setAttribute('aria-pressed', build ? 'false' : 'true');
+    // No aria-pressed: the visible label changes with the mode ("BUILD mode: RUN it" /
+    // "RUN mode: Freeze"), so the name already says the state and the action.
     els.modeLabel.textContent = build ? 'BUILD' : 'RUN';
     els.mode.querySelector('.mode-next').textContent = build ? 'RUN it' : 'Freeze';
     els.hint.textContent = hintFor(s);

@@ -23,6 +23,7 @@ export function createScene(ctx) {
   renderer.toneMappingExposure = 0.98;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.domElement.tabIndex = 0;
+  renderer.domElement.id = 'workbench-canvas';   // the skip link's target
   renderer.domElement.setAttribute('aria-label', 'Popsicle-stick workbench');
   document.body.appendChild(renderer.domElement);
 
