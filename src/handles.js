@@ -2,7 +2,7 @@
 // Amber ends aim/tilt, the arrow lifts, and the ring rolls. Sprites do not
 // attenuate with distance, so a real-scale 2mm stick remains operable at any zoom.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 function discTexture(kind) {
   const c = document.createElement('canvas'); c.width = c.height = 128;

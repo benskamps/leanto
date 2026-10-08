@@ -3,7 +3,7 @@
 // and resting it on whatever it meets (table or sticks). A vertical stick lands on its
 // end, a tilted roof plank rests on both its supports, nothing interpenetrates.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createSolver(ctx) {
   const { RAPIER } = ctx;

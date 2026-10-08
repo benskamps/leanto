@@ -4,7 +4,7 @@
 //   hold D and sweep the cursor to lay a whole course of planks (spacing from hand speed).
 // UNDO / REDO (Ctrl+Z / Ctrl+Y): snapshot command stack, BUILD-only, flushed on the RUN reveal.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createTools(ctx) {
   const KERF = 0.0004;                       // the scissors eat 0.4mm

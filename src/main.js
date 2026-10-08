@@ -2,8 +2,8 @@
 // All shared state lives on `ctx`; each module hangs its piece on it.
 
 export async function boot() {
-  const THREE = await import('three');
-  const RAPIER_mod = await import('https://esm.sh/@dimforge/rapier3d-compat@0.14.0');
+  const THREE = await import('./vendor/three/three.module.min.js');
+  const RAPIER_mod = await import('./vendor/rapier/rapier.es.js');
   const RAPIER = RAPIER_mod.default ?? RAPIER_mod;
   await RAPIER.init();
 

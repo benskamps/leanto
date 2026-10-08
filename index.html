@@ -151,25 +151,7 @@
   </div>
   <div id="err"></div>
 
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
-  }
-}
-</script>
-
-<script type="module">
-window.__leanto = { ready:false, sticks:0, frames:0, physSteps:0, error:null, buildMode:true, glueMode:false, joints:0, metrics:null };
-import('./src/main.js').then(m => m.boot()).catch(err => {
-  window.__leanto.error = String(err && err.stack || err);
-  document.getElementById('loading').style.display = 'none';
-  const errEl = document.getElementById('err');
-  errEl.style.display = 'block';
-  errEl.textContent = 'leanto failed to start:\n' + window.__leanto.error;
-});
-</script>
+<script type="module" src="./src/boot.js"></script>
 
 </body>
 </html>

@@ -3,7 +3,7 @@
 // stay compatible with; the loader spawns exact sticks and re-bonds through the
 // pose-preserving joint math, so a loaded scene is physically identical.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createSave(ctx) {
   const VERSION = 1;

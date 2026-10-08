@@ -87,7 +87,7 @@ contact inference, previews, undo, and better camera behavior—not a grid.
 | **P1** | Stable BUILD still runs the render loop and 120 Hz physics. | The quiet editing state spends the same clock budget as live collapse. |
 | **P1** | Rendering uses per-stick materials, up to 2× DPR, and a fixed 4096² shadow map. | The visual path is expensive before the 300-stick physics stress begins. |
 | **P2** | Controls copy is duplicated across `README.md`, the HUD, and event handlers. | Bindings will drift again unless UI copy is generated from one command registry. |
-| **P2** | CDN modules remain runtime dependencies and there is no automated interaction/perf gate. | Cold start and regressions depend on external services and manual memory. |
+| **P2** | There is no automated interaction/perf gate. (Three/Rapier are vendored under `src/vendor/` since 2026-10-08; no CDN at runtime.) | Regressions depend on manual memory. |
 
 ### Measured baseline on this workstation
 
@@ -292,8 +292,9 @@ baseline JSON beside the harness so a visual change cannot quietly spend 8 ms.
    screen bounds or a small spatial index, invalidated by camera/object movement.
 6. **Pool transient visuals.** Reuse glue highlights, ghosts, cut previews, motes, and
    selection handles; keep allocations out of pointermove and render paths.
-7. **Pin the runtime.** Add a package/build manifest, vendor exact Three/Rapier versions,
-   and remove CDN availability from cold-start correctness.
+7. **Pin the runtime.** ~~Vendor exact Three/Rapier versions and remove CDN availability
+   from cold-start correctness~~ (done 2026-10-08, `src/vendor/README.md`). A package/build
+   manifest is still open.
 
 Do not lower the RUN physics rate or disable CCD to win a benchmark. Those change the toy.
 
