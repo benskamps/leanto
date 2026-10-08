@@ -2,9 +2,9 @@
 // The register is a cozy craft table in late-afternoon light, with a little dial
 // that slides the room from golden afternoon to lamp-lit evening.
 
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import * as THREE from './vendor/three/three.module.min.js';
+import { OrbitControls } from './vendor/three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from './vendor/three/addons/geometries/RoundedBoxGeometry.js';
 
 export function createScene(ctx) {
   const { RAPIER, world } = ctx;

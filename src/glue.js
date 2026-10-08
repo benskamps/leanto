@@ -11,7 +11,7 @@
 // to per-stick Fixed bodies and the wet joints are recreated from the bond edge list —
 // the edge list, not the joint objects, is the source of truth, so B-toggles don't drift.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createGlue(ctx) {
   const { RAPIER } = ctx;

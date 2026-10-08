@@ -1,7 +1,7 @@
 // sticks.js — stick geometry/materials, spawn/sweep, registry, BUILD⇄RUN mode.
 // Every stick body mutation (spawn, remove, recreate) goes through here.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createSticks(ctx) {
   const { RAPIER } = ctx;

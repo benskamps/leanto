@@ -3,7 +3,7 @@
 // key light, and the survival celebration: when a real structure rides out the RUN
 // reveal, the room glows for a moment and a little paper confetti falls.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createCharm(ctx) {
   const { RAPIER, scene, world } = ctx;

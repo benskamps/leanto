@@ -5,7 +5,7 @@
 // by freely rotating ball-and-socket constraints. Each part is still selectable and
 // grabbable in RUN through the same physical hand used for loose sticks.
 
-import * as THREE from 'three';
+import * as THREE from './vendor/three/three.module.min.js';
 
 export function createRagdolls(ctx) {
   const { RAPIER } = ctx;
