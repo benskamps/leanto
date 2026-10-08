@@ -21,7 +21,9 @@ export function createWorkbench(ctx) {
   els.add.addEventListener('click', run('addStick'));
   els.ragdoll.addEventListener('click', run('addRagdoll'));
   els.cottage.addEventListener('click', run('loadCottage'));
-  els.cottage.addEventListener('click', () => { fresh = false; });
+  els.cottage.addEventListener('click', () => {      // a loaded cottage is past the invitation
+    if (fresh){ fresh = false; els.hint.textContent = 'Drag a stick.'; }
+  });
   for (const b of els.toolButtons) b.addEventListener('click', () => run('setTool')(b.dataset.tool));
 
   function setHelp(on){
